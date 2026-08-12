@@ -108,8 +108,6 @@ No external test framework, mock generator, or linter is required.
 
 ## Backend Design (Refactoring)
 
-> “Do not communicate by sharing memory; instead, share memory by communicating.” — Rob Pike
-
 The backend keeps the design explicit and shallow:
 
 - `cmd/chatserver` and `cmd/loadbalancer` are composition roots. They parse configuration, create concrete dependencies, and own startup and graceful shutdown.
