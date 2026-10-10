@@ -1,105 +1,73 @@
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { Login } from './components/Login'
 import { ChatRoom } from './components/ChatRoom'
-import { getOptimalServer, getChatHistory } from './services/api'
-import { ChatWebSocket } from './services/websocket'
+import { getChatHistory, resolveWebSocketUrl } from './services/api'
+import { ChatConnection } from './services/websocket'
+import type { ChatMessage, ConnectionState } from './types'
 
-interface Message {
-  id?: number
-  username: string
-  content: string
-  server?: string
-  timestamp?: string
+function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<number, ChatMessage>()
+  for (const message of current) byId.set(message.id, message)
+  for (const message of incoming) byId.set(message.id, message)
+  return [...byId.values()].sort((a, b) => a.id - b.id)
 }
 
 function App() {
-  const [isConnected, setIsConnected] = useState(false)
   const [username, setUsername] = useState('')
-  const [messages, setMessages] = useState<Message[]>([])
-  const [websocket, setWebsocket] = useState<ChatWebSocket | null>(null)
-  const [connectionStatus, setConnectionStatus] = useState<string>('')
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [connectionState, setConnectionState] = useState<ConnectionState>('closed')
+  const connectionRef = useRef<ChatConnection | null>(null)
 
-  const handleConnect = async (inputUsername: string) => {
+  const loadHistory = useCallback(async () => {
     try {
-      setConnectionStatus('Getting optimal server...')
-      const serverAddress = await getOptimalServer()
-
-      setConnectionStatus('Loading chat history...')
-      const history = await getChatHistory(serverAddress)
-      setMessages(history || [])
-
-      setConnectionStatus('Connecting to chat...')
-      const ws = new ChatWebSocket(
-        serverAddress,
-        inputUsername,
-        (message) => {
-          const messageWithId = {
-            ...message,
-            id: message.id || Date.now() + Math.random(),
-            timestamp: message.timestamp || new Date().toISOString()
-          }
-          setMessages(prev => [...prev, messageWithId])
-        },
-        () => {
-          setConnectionStatus('')
-          setIsConnected(true)
-          setUsername(inputUsername)
-        },
-        () => {
-          setIsConnected(false)
-          setConnectionStatus('Disconnected')
-        },
-        (error) => {
-          console.error('WebSocket error:', error)
-          setConnectionStatus(`Error: ${error}`)
-        }
-      )
-
-      ws.connect()
-      setWebsocket(ws)
+      const history = await getChatHistory()
+      setMessages(previous => mergeMessages(previous, history))
     } catch (error) {
-      console.error('Connection error:', error)
-      setConnectionStatus('Failed to connect. Please try again.')
+      console.error('Failed to load chat history:', error)
     }
+  }, [])
+
+  const handleConnect = (inputUsername: string) => {
+    connectionRef.current?.stop()
+    setMessages([])
+    setUsername(inputUsername)
+
+    const connection = new ChatConnection(resolveWebSocketUrl, inputUsername, {
+      onMessage: message => setMessages(previous => mergeMessages(previous, [message])),
+      onStateChange: setConnectionState,
+      onOpen: () => void loadHistory(),
+    })
+    connectionRef.current = connection
+    connection.start()
   }
 
   const handleSendMessage = (content: string) => {
-    websocket?.sendMessage(content)
+    if (!connectionRef.current?.send(content)) {
+      console.warn('Message not sent: connection is not open')
+    }
   }
 
   const handleDisconnect = () => {
-    websocket?.disconnect()
-    setWebsocket(null)
-    setIsConnected(false)
+    connectionRef.current?.stop()
+    connectionRef.current = null
     setUsername('')
     setMessages([])
-    setConnectionStatus('')
   }
 
   useEffect(() => {
-    return () => {
-      websocket?.disconnect()
-    }
-  }, [websocket])
+    return () => connectionRef.current?.stop()
+  }, [])
 
-  if (!isConnected) {
-    return (
-      <div>
-        <Login onConnect={handleConnect} />
-        {connectionStatus && (
-          <div className="fixed bottom-4 right-4 bg-background border rounded-lg p-3 shadow-lg">
-            <p className="text-sm">{connectionStatus}</p>
-          </div>
-        )}
-      </div>
-    )
+  if (!username) {
+    return <Login onConnect={handleConnect} />
   }
 
   return (
     <ChatRoom
       username={username}
       messages={messages}
+      connectionState={connectionState}
       onSendMessage={handleSendMessage}
       onDisconnect={handleDisconnect}
     />

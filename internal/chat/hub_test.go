@@ -226,6 +226,40 @@ func TestHubRemovesSlowClient(t *testing.T) {
 	}
 }
 
+func TestHubSendsGoingAwayOnShutdown(t *testing.T) {
+	serverConnection, clientConnection, closePair := newConnectedWebSocketPair(t)
+	defer closePair()
+
+	loads := make(chan int, 4)
+	hub := newTestHub(reporterFunc(func(_ context.Context, load int) error {
+		loads <- load
+		return nil
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrors := make(chan error, 1)
+	go func() { runErrors <- hub.Run(ctx, make(chan []byte)) }()
+
+	registerContext, stopRegister := context.WithTimeout(context.Background(), time.Second)
+	defer stopRegister()
+	if err := hub.registerClient(registerContext, &client{hub: hub, conn: serverConnection, send: make(chan []byte, 1), username: "alice"}); err != nil {
+		t.Fatalf("register client: %v", err)
+	}
+	waitForLoad(t, loads, 1)
+
+	cancel()
+	if err := <-runErrors; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if err := clientConnection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	_, _, err := clientConnection.ReadMessage()
+	if !websocket.IsCloseError(err, websocket.CloseGoingAway) {
+		t.Fatalf("client read error = %v, want close 1001 going away", err)
+	}
+}
+
 func TestHubStopsWhenBroadcastSubscriptionCloses(t *testing.T) {
 	t.Parallel()
 
@@ -294,6 +328,12 @@ func waitForLoad(t *testing.T, loads <-chan int, want int) {
 
 func newWebSocketPair(t *testing.T) (*websocket.Conn, func()) {
 	t.Helper()
+	serverConnection, _, cleanup := newConnectedWebSocketPair(t)
+	return serverConnection, cleanup
+}
+
+func newConnectedWebSocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func()) {
+	t.Helper()
 
 	serverConnections := make(chan *websocket.Conn, 1)
 	upgradeErrors := make(chan error, 1)
@@ -354,5 +394,5 @@ func newWebSocketPair(t *testing.T) (*websocket.Conn, func()) {
 			server.Close()
 		})
 	}
-	return serverConnection, cleanup
+	return serverConnection, clientConnection, cleanup
 }

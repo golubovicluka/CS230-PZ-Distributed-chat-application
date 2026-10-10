@@ -79,6 +79,12 @@ func (c *Client) Register(ctx context.Context) error {
 	return c.post(ctx, "/register", 0)
 }
 
+// Deregister removes the chat server from the registry during shutdown so new
+// clients are not sent to it while it drains.
+func (c *Client) Deregister(ctx context.Context) error {
+	return c.post(ctx, "/deregister", 0)
+}
+
 // UpdateLoad reports the current number of connected clients.
 func (c *Client) UpdateLoad(ctx context.Context, load int) error {
 	if load < 0 {

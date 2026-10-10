@@ -356,6 +356,14 @@ func TestClientSendsExactRequest(t *testing.T) {
 				return client.UpdateLoad(ctx, 7)
 			},
 		},
+		{
+			name:     "deregister",
+			path:     "/deregister",
+			wantBody: `{"address":"ws://chat.example.com","load":0}`,
+			call: func(ctx context.Context, client *Client) error {
+				return client.Deregister(ctx)
+			},
+		},
 	}
 
 	type request struct {

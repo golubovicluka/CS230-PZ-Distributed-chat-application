@@ -33,7 +33,7 @@ func TestMutationEndpointsRejectInvalidRequests(t *testing.T) {
 		{name: "oversized body", body: oversizedBody, wantStatus: http.StatusRequestEntityTooLarge, wantBody: "request body is too large"},
 	}
 
-	for _, endpoint := range []string{"/register", "/update"} {
+	for _, endpoint := range []string{"/register", "/update", "/deregister"} {
 		for _, testCase := range testCases {
 			t.Run(strings.TrimPrefix(endpoint, "/")+"/"+testCase.name, func(t *testing.T) {
 				balancer, _ := newTestLoadBalancer()
@@ -149,6 +149,110 @@ func TestMutationEndpointsUpsertAndSelect(t *testing.T) {
 	}
 }
 
+func TestExpiredServersAreNotSelected(t *testing.T) {
+	balancer, _ := newTestLoadBalancer()
+	clock := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	balancer.now = func() time.Time { return clock }
+	handler := balancer.Handler()
+
+	post(t, handler, "/register", `{"address":"crashed","load":0}`)
+	clock = clock.Add(30 * time.Second)
+	post(t, handler, "/update", `{"address":"healthy","load":9}`)
+	clock = clock.Add(45 * time.Second)
+
+	if got := selectServer(t, handler); got.Address != "healthy" {
+		t.Fatalf("selected %q, want the server that is still reporting", got.Address)
+	}
+	if got := balancer.Available(); got != 1 {
+		t.Fatalf("Available() = %d, want 1 live server", got)
+	}
+
+	clock = clock.Add(2 * time.Minute)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/get", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /get after every server expired = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestUpdatesPruneExpiredServers(t *testing.T) {
+	balancer, _ := newTestLoadBalancer()
+	clock := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	balancer.now = func() time.Time { return clock }
+	handler := balancer.Handler()
+
+	post(t, handler, "/register", `{"address":"crashed","load":0}`)
+	clock = clock.Add(2 * time.Minute)
+	post(t, handler, "/update", `{"address":"healthy","load":1}`)
+
+	balancer.mu.RLock()
+	_, stillStored := balancer.servers["crashed"]
+	balancer.mu.RUnlock()
+	if stillStored {
+		t.Fatal("expired server was not pruned on write")
+	}
+}
+
+func TestDeregisterRemovesServer(t *testing.T) {
+	balancer, _ := newTestLoadBalancer()
+	handler := balancer.Handler()
+
+	post(t, handler, "/register", `{"address":"leaving","load":0}`)
+	post(t, handler, "/register", `{"address":"staying","load":5}`)
+	post(t, handler, "/deregister", `{"address":"leaving","load":0}`)
+	post(t, handler, "/deregister", `{"address":"unknown","load":0}`)
+
+	if got := selectServer(t, handler); got.Address != "staying" {
+		t.Fatalf("selected %q after deregistration, want %q", got.Address, "staying")
+	}
+}
+
+func TestNewRejectsInvalidArguments(t *testing.T) {
+	testCases := []struct {
+		name   string
+		logger *log.Logger
+		ttl    time.Duration
+	}{
+		{name: "nil logger", ttl: time.Second},
+		{name: "zero ttl", logger: log.New(io.Discard, "", 0)},
+		{name: "negative ttl", logger: log.New(io.Discard, "", 0), ttl: -time.Second},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("New() did not panic")
+				}
+			}()
+			New(testCase.logger, testCase.ttl)
+		})
+	}
+}
+
+func post(t *testing.T, handler http.Handler, path, body string) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST %s status = %d, want %d; body = %q", path, response.Code, http.StatusOK, response.Body.String())
+	}
+}
+
+func selectServer(t *testing.T, handler http.Handler) serverResponse {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/get", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET /get status = %d, want %d; body = %q", response.Code, http.StatusOK, response.Body.String())
+	}
+	var selected serverResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &selected); err != nil {
+		t.Fatalf("decode selection: %v", err)
+	}
+	return selected
+}
+
 func TestGetWithoutServersReturnsServiceUnavailable(t *testing.T) {
 	balancer, _ := newTestLoadBalancer()
 	request := httptest.NewRequest(http.MethodGet, "/get", nil)
@@ -175,6 +279,7 @@ func TestHandlerUsesExplicitMethodRoutes(t *testing.T) {
 		{name: "register rejects GET", method: http.MethodGet, path: "/register", wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodPost},
 		{name: "update rejects PUT", method: http.MethodPut, path: "/update", wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodPost},
 		{name: "get rejects POST", method: http.MethodPost, path: "/get", wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodGet},
+		{name: "deregister rejects GET", method: http.MethodGet, path: "/deregister", wantStatus: http.StatusMethodNotAllowed, wantAllow: http.MethodPost},
 		{name: "unknown path", method: http.MethodGet, path: "/missing", wantStatus: http.StatusNotFound},
 		{name: "trailing slash is not a route", method: http.MethodGet, path: "/get/", wantStatus: http.StatusNotFound},
 	}
@@ -277,7 +382,7 @@ func (writer *blockingLogWriter) Write(payload []byte) (int, error) {
 
 func TestHandlerReleasesStateLockBeforeLogging(t *testing.T) {
 	logWriter := &blockingLogWriter{started: make(chan struct{}), release: make(chan struct{})}
-	balancer := New(log.New(logWriter, "", 0))
+	balancer := New(log.New(logWriter, "", 0), time.Minute)
 	request := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(`{"address":"server-a","load":1}`))
 	response := httptest.NewRecorder()
 	requestDone := make(chan struct{})
@@ -335,5 +440,5 @@ func doRequest(client *http.Client, request *http.Request, wantStatus int) error
 
 func newTestLoadBalancer() (*LoadBalancer, *bytes.Buffer) {
 	logs := &bytes.Buffer{}
-	return New(log.New(logs, "", 0)), logs
+	return New(log.New(logs, "", 0), time.Minute), logs
 }
