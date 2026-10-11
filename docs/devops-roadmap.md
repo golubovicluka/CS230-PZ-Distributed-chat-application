@@ -36,6 +36,7 @@ Notes from implementing Phase 4:
 - **Tilt:** `live_update` is dropped. Distroless images have no shell to restart the process, and a cached Go image rebuild takes about 20 seconds.
 - **Moved to Phase 3:** the CoreDNS rewrite and the Keycloak, OpenFGA, Mailpit, fake-gcs, Pub/Sub emulator and ClamAV platform pieces. They have no consumer until the features exist.
 - **kubeconform:** the datree catalog's `ClusterSecretStore` v1 schema does not compile as draft-04 (a CRD property named `additionalProperties` is a boolean), so that one kind is skipped. The first kubeconform run caught a real duplicate-label bug in the chart.
+- **Argo CD diff:** server-side diff is on for the whole controller. Without it, fields that the API server defaults on Gateway API resources, such as `matches` and the `group` and `kind` of references, show up as permanent drift. The first kind run in CI stalled exactly there.
 - **End to end in CI:** `k8s-e2e.yaml` builds the platform on kind for the PR's revision, deploys with `tilt ci`, and runs the smoke test and two Go WebSocket tests. One test checks fan-out and history. The other checks that a rolling restart closes sockets with 1001, not 1006. The drain test fails on a hard kill.
 
 ## Context

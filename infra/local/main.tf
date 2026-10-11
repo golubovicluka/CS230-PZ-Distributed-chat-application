@@ -171,7 +171,8 @@ resource "helm_release" "argocd" {
     }
     configs = {
       params = {
-        "server.insecure" = true
+        "server.insecure"             = true
+        "controller.diff.server.side" = true
       }
       cm = {
         "resource.customizations.health.argoproj.io_Application" = local.application_health_lua

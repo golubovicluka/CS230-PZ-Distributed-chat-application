@@ -207,6 +207,8 @@ platform-wait timeout="900":
         if ((SECONDS >= deadline)); then
           echo "timed out waiting for $app" >&2
           {{ kube }} -n argocd get applications >&2
+          echo "resources of $app that are not Synced:" >&2
+          {{ kube }} -n argocd get application "$app" -o jsonpath='{range .status.resources[?(@.status!="Synced")]}{.kind} {.namespace}/{.name}: {.status} {.health.status} {.health.message}{"\n"}{end}' >&2
           exit 1
         fi
         sleep 5
