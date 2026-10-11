@@ -9,6 +9,9 @@
   "timezone": "Europe/Belgrade",
   "schedule": ["before 6am on monday"],
   "postUpdateOptions": ["gomodTidy"],
+  "argocd": {
+    "managerFilePatterns": ["/^deploy/argocd/.+\\.ya?ml$/"]
+  },
   "packageRules": [
     {
       "description": "Keep OpenTelemetry Go modules in lockstep",
@@ -45,6 +48,11 @@
       "description": "Move the Dagger CLI, engine and workflow version together",
       "matchPackageNames": ["dagger/dagger", "dagger"],
       "groupName": "Dagger"
+    },
+    {
+      "description": "Keep the kind node image and kubectl on the same Kubernetes release",
+      "matchPackageNames": ["kindest/node", "kubectl"],
+      "groupName": "Kubernetes version"
     }
   ],
   "customManagers": [
@@ -64,6 +72,25 @@
         "\"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s*// renovate: image"
       ],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Images pinned by tag and digest in OpenTofu variables",
+      "managerFilePatterns": ["/^infra/.+\\.tf$/"],
+      "matchStrings": [
+        "\"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Git revisions pinned by commit in the Dagger module",
+      "managerFilePatterns": ["/^ci/.+\\.go$/"],
+      "matchStrings": [
+        "\"(?<currentDigest>[a-f0-9]{40})\"\\s*// renovate: git-refs (?<packageName>\\S+) (?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "git-refs",
+      "depNameTemplate": "CRDs-catalog"
     },
     {
       "customType": "regex",
