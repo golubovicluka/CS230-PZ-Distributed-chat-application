@@ -220,7 +220,7 @@ platform-wait timeout="900":
 cluster-secrets:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ kube }} -n openbao rollout status statefulset/openbao --timeout=300s
+    {{ kube }} -n openbao wait pod/openbao-0 --for=condition=Ready --timeout=300s
     {{ kube }} -n openbao port-forward svc/openbao 18200:8200 >/dev/null &
     forward=$!
     trap 'kill "$forward"' EXIT

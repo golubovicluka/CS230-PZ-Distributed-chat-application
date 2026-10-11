@@ -93,7 +93,7 @@ jobs:
             echo "== ${app} resources that are not Synced or not Healthy"
             kubectl --context kind-chat -n argocd get "${app}" \
               -o jsonpath='{range .status.resources[*]}{.kind} {.namespace}/{.name}: {.status} {.health.status} {.health.message}{"\n"}{end}' \
-              | grep -v ': Synced Healthy' || true
+              | grep -Ev ': Synced( Healthy)?[[:space:]]*$' || true
           done
           kubectl --context kind-chat get pods -A -o wide || true
           kubectl --context kind-chat get events -A --sort-by=.lastTimestamp | tail -n 100 || true
