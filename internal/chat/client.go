@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -64,9 +67,25 @@ func (c *client) readPump(ctx context.Context) {
 			continue
 		}
 
-		if err := c.hub.handleMessage(ctx, c.username, incoming.Content); err != nil {
-			c.hub.logger.Printf("[Server %s] process message from client %q: %v", c.hub.address, c.username, err)
-		}
+		c.process(ctx, incoming.Content)
+	}
+}
+
+// process handles one chat message in its own trace. The connection's
+// long-lived upgrade span is linked rather than used as the parent, so each
+// message is a short trace instead of a child of an hours-long span.
+func (c *client) process(ctx context.Context, content string) {
+	ctx, span := tracer.Start(ctx, "chat.message.receive",
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.LinkFromContext(ctx)),
+		trace.WithSpanKind(trace.SpanKindServer),
+		trace.WithAttributes(attribute.String("chat.server", c.hub.address)))
+	defer span.End()
+
+	if err := c.hub.handleMessage(ctx, c.username, content); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "process message")
+		c.hub.logger.Printf("[Server %s] process message from client %q: %v", c.hub.address, c.username, err)
 	}
 }
 

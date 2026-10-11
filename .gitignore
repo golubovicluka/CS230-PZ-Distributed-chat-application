@@ -1,5 +1,3 @@
 CLAUDE.md
-/server/chat.db
 /.claude
-/server/chat.db-shm
-/server/chat.db-wal
+sbom-*.spdx.json

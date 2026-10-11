@@ -1,0 +1,91 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ !github.event.act }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@27b130bf0f79a7f6fbbbe0fbca6760dc9bb40a77 # v8.4.1
+        with:
+          version: "0.21.10"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Choose tags
+        id: tags
+        run: |
+          short_sha="${GITHUB_SHA::12}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "tags=${short_sha},${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${short_sha},main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish images
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          dagger --progress plain call publish \
+            --registry "${REGISTRY}" \
+            --username "${GITHUB_ACTOR}" \
+            --password env://REGISTRY_PASSWORD \
+            --tags "${TAGS}" \
+            --revision "${GITHUB_SHA}" \
+            > published.txt
+          cat published.txt
+
+      - name: Generate SBOMs
+        run: |
+          for component in chatserver loadbalancer web; do
+            dagger --progress plain call sbom --component "${component}" export --path "sbom-${component}.spdx.json"
+          done
+
+      - name: Sign images and attest SBOMs
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          for component in chatserver loadbalancer web; do
+            ref="$(grep -F "/chat-${component}:" published.txt | head -n 1)"
+            if [[ -z "${ref}" ]]; then
+              echo "no published reference for ${component}" >&2
+              exit 1
+            fi
+            image="${ref%%:*}@${ref##*@}"
+            cosign sign "${image}"
+            cosign attest --type spdxjson --predicate "sbom-${component}.spdx.json" "${image}"
+          done
+
+      - name: Keep SBOMs with the run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sboms
+          path: sbom-*.spdx.json

@@ -1,0 +1,10 @@
+config:
+  line-length: false
+  no-duplicate-heading:
+    siblings_only: true
+
+globs:
+  - "**/*.md"
+
+ignores:
+  - "**/node_modules/**"

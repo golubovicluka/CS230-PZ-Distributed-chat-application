@@ -5,7 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
+
+const closeNoticeWait = time.Second
 
 var ErrHubStopped = errors.New("chat hub stopped")
 
@@ -66,6 +71,7 @@ func (h *Hub) Run(ctx context.Context, broadcasts <-chan []byte) error {
 	defer func() {
 		stopReporter()
 		for c := range clients {
+			h.sendGoingAway(c)
 			h.removeClient(clients, c)
 		}
 		close(h.done)
@@ -82,6 +88,7 @@ func (h *Hub) Run(ctx context.Context, broadcasts <-chan []byte) error {
 				continue
 			}
 			clients[c] = struct{}{}
+			connectionsActive.Add(ctx, 1)
 			load := len(clients)
 			h.logger.Printf("[Server %s] client %q connected; clients=%d", h.address, c.username, load)
 			h.queueLoad(load)
@@ -99,15 +106,19 @@ func (h *Hub) Run(ctx context.Context, broadcasts <-chan []byte) error {
 				return errors.New("chat broadcast subscription closed")
 			}
 			loadChanged := false
+			delivered := 0
 			for c := range clients {
 				select {
 				case c.send <- payload:
+					delivered++
 				default:
 					h.logger.Printf("[Server %s] removing slow client %q", h.address, c.username)
 					h.removeClient(clients, c)
+					clientsDropped.Add(ctx, 1)
 					loadChanged = true
 				}
 			}
+			messagesDelivered.Add(ctx, int64(delivered))
 			if loadChanged {
 				h.queueLoad(len(clients))
 			}
@@ -139,12 +150,22 @@ func (h *Hub) removeClient(clients map[*client]struct{}, c *client) bool {
 	}
 
 	delete(clients, c)
+	connectionsActive.Add(context.Background(), -1)
 	if err := c.conn.Close(); err != nil {
 		h.logger.Printf("[Server %s] close client %q: %v", h.address, c.username, err)
 	}
 	close(c.send)
 	h.logger.Printf("[Server %s] client %q disconnected; clients=%d", h.address, c.username, len(clients))
 	return true
+}
+
+// sendGoingAway tells the browser the server is leaving, so it reconnects
+// through the load balancer instead of treating the drop as an error.
+func (h *Hub) sendGoingAway(c *client) {
+	notice := websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down")
+	if err := c.conn.WriteControl(websocket.CloseMessage, notice, time.Now().Add(closeNoticeWait)); err != nil {
+		h.logger.Printf("[Server %s] send going-away to client %q: %v", h.address, c.username, err)
+	}
 }
 
 func (h *Hub) queueLoad(load int) {
@@ -187,6 +208,8 @@ func (h *Hub) handleMessage(ctx context.Context, username, content string) error
 	if err != nil {
 		return fmt.Errorf("save message: %w", err)
 	}
+
+	messagesReceived.Add(ctx, 1)
 
 	if err := h.broker.Publish(ctx, message); err != nil {
 		return fmt.Errorf("publish message: %w", err)

@@ -1,0 +1,111 @@
+name: distributed-chat
+
+x-chatserver: &chatserver
+  image: ${IMAGE_REGISTRY:-ghcr.io/golubovicluka}/chat-chatserver:${IMAGE_TAG:-dev}
+  build:
+    context: .
+    dockerfile: build/Dockerfile
+    target: chatserver
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    loadbalancer:
+      condition: service_started
+
+x-chatserver-env: &chatserver-env
+  DATABASE_URL: postgres://chat:chat@postgres:5432/chat?sslmode=disable
+  REDIS_ADDR: redis:6379
+  REGISTRY_URL: http://loadbalancer:9000
+  CHAT_DRAIN_DELAY: 2s
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_METRIC_EXPORT_INTERVAL: "15000"
+  PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS:-}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: chat
+      POSTGRES_PASSWORD: chat
+      POSTGRES_DB: chat
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat -d chat"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    image: redis:8.8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  loadbalancer:
+    image: ${IMAGE_REGISTRY:-ghcr.io/golubovicluka}/chat-loadbalancer:${IMAGE_TAG:-dev}
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+      target: loadbalancer
+    command: ["-address", ":9000", "-server-ttl", "30s"]
+    restart: unless-stopped
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      PYROSCOPE_SERVER_ADDRESS: ${PYROSCOPE_SERVER_ADDRESS:-}
+
+  chatserver-1:
+    <<: *chatserver
+    environment:
+      <<: *chatserver-env
+      CHAT_SERVER_NAME: chat-1
+      CHAT_ADVERTISE: /cs/1
+
+  chatserver-2:
+    <<: *chatserver
+    environment:
+      <<: *chatserver-env
+      CHAT_SERVER_NAME: chat-2
+      CHAT_ADVERTISE: /cs/2
+
+  web:
+    image: ${IMAGE_REGISTRY:-ghcr.io/golubovicluka}/chat-web:${IMAGE_TAG:-dev}
+    build:
+      context: chat-app
+    restart: unless-stopped
+
+  gateway:
+    image: nginxinc/nginx-unprivileged:1.30-alpine
+    volumes:
+      - ./deploy/compose/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - web
+      - loadbalancer
+      - chatserver-1
+      - chatserver-2
+    restart: unless-stopped
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.36.0
+    profiles: ["obs"]
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:4040:4040"
+
+volumes:
+  postgres-data:

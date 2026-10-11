@@ -1,104 +1,112 @@
-interface WebSocketMessage {
-  id?: number
-  username: string
-  content: string
-  server?: string
-  timestamp?: string
+import type { ChatMessage, ConnectionState } from '@/types'
+
+const GOING_AWAY = 1001
+const NORMAL_CLOSURE = 1000
+const BASE_DELAY_MS = 500
+const MAX_DELAY_MS = 10_000
+const GOING_AWAY_DELAY_MS = 500
+
+interface Handlers {
+  onMessage: (message: ChatMessage) => void
+  onStateChange: (state: ConnectionState) => void
+  onOpen: () => void
 }
 
-export class ChatWebSocket {
+export class ChatConnection {
   private ws: WebSocket | null = null
-  private serverUrl: string
-  private username: string
-  private onMessage: (message: WebSocketMessage) => void
-  private onConnect: () => void
-  private onDisconnect: () => void
-  private onError: (error: string) => void
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private attempt = 0
+  private stopped = false
+  private readonly resolveUrl: () => Promise<string>
+  private readonly username: string
+  private readonly handlers: Handlers
 
-  constructor(
-    serverUrl: string,
-    username: string,
-    onMessage: (message: WebSocketMessage) => void,
-    onConnect: () => void,
-    onDisconnect: () => void,
-    onError: (error: string) => void
-  ) {
-    this.serverUrl = serverUrl
+  constructor(resolveUrl: () => Promise<string>, username: string, handlers: Handlers) {
+    this.resolveUrl = resolveUrl
     this.username = username
-    this.onMessage = onMessage
-    this.onConnect = onConnect
-    this.onDisconnect = onDisconnect
-    this.onError = onError
+    this.handlers = handlers
   }
 
-  connect() {
+  start() {
+    this.stopped = false
+    this.attempt = 0
+    void this.connect()
+  }
+
+  stop() {
+    this.stopped = true
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    this.ws?.close(NORMAL_CLOSURE)
+    this.ws = null
+    this.handlers.onStateChange('closed')
+  }
+
+  send(content: string): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      return false
+    }
+    this.ws.send(JSON.stringify({ content }))
+    return true
+  }
+
+  private async connect() {
+    this.handlers.onStateChange(this.attempt === 0 ? 'connecting' : 'reconnecting')
+
+    let url: string
     try {
-      const wsUrl = `${this.serverUrl}/ws?username=${encodeURIComponent(this.username)}`
-      this.ws = new WebSocket(wsUrl)
-
-      this.ws.onopen = () => {
-        console.log('WebSocket connected')
-        this.onConnect()
-      }
-
-      this.ws.onmessage = (event) => {
-        try {
-          const message: WebSocketMessage = JSON.parse(event.data)
-          
-          if (typeof message.content === 'string' && message.content.startsWith('{')) {
-            try {
-              const parsedContent = JSON.parse(message.content)
-              if (parsedContent.content) {
-                message.content = parsedContent.content
-                message.username = parsedContent.username || message.username
-              }
-            } catch (e) {
-              console.log('Failed to parse nested JSON content:', e)
-            }
-          }
-          
-          this.onMessage(message)
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error)
-        }
-      }
-
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected')
-        this.onDisconnect()
-      }
-
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
-        this.onError('Connection error occurred')
-      }
+      url = await this.resolveUrl()
     } catch (error) {
-      console.error('Error creating WebSocket connection:', error)
-      this.onError('Failed to create connection')
+      console.warn('Could not resolve a chat server:', error)
+      this.scheduleReconnect(false)
+      return
     }
-  }
+    if (this.stopped) {
+      return
+    }
 
-  sendMessage(content: string) {
-    
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const message = {
-        username: this.username,
-        content: content
+    const ws = new WebSocket(`${url}?username=${encodeURIComponent(this.username)}`)
+    this.ws = ws
+
+    ws.onopen = () => {
+      this.attempt = 0
+      this.handlers.onStateChange('open')
+      this.handlers.onOpen()
+    }
+
+    ws.onmessage = (event) => {
+      try {
+        this.handlers.onMessage(JSON.parse(event.data) as ChatMessage)
+      } catch (error) {
+        console.error('Discarding malformed chat message:', error)
       }
-      this.ws.send(JSON.stringify(message))
-    } else {
-      this.onError('Connection is not open')
     }
-  }
 
-  disconnect() {
-    if (this.ws) {
-      this.ws.close()
+    ws.onclose = (event) => {
+      if (this.ws !== ws) {
+        return
+      }
       this.ws = null
+      if (!this.stopped) {
+        this.scheduleReconnect(event.code === GOING_AWAY)
+      }
     }
   }
 
-  isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN
+  // Full-jitter exponential backoff spreads reconnects out, so a server that
+  // drains many clients at once does not stampede the next one.
+  private scheduleReconnect(serverIsLeaving: boolean) {
+    const ceiling = serverIsLeaving
+      ? GOING_AWAY_DELAY_MS
+      : Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** this.attempt)
+    const delay = Math.random() * ceiling
+    this.attempt += 1
+    this.handlers.onStateChange('reconnecting')
+    this.timer = setTimeout(() => {
+      this.timer = null
+      void this.connect()
+    }, delay)
   }
 }

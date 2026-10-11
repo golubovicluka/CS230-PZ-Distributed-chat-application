@@ -1,0 +1,87 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)",
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Europe/Belgrade",
+  "schedule": ["before 6am on monday"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "Keep OpenTelemetry Go modules in lockstep",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["go.opentelemetry.io/**"],
+      "groupName": "OpenTelemetry Go"
+    },
+    {
+      "description": "Group pinned developer CLIs",
+      "matchManagers": ["mise"],
+      "groupName": "developer tools"
+    },
+    {
+      "description": "Low-risk frontend tooling updates merge themselves once checks pass",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Stay on Node LTS majors",
+      "matchDatasources": ["docker", "node-version"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "/^\\d*[02468](\\.|$)/"
+    },
+    {
+      "description": "Do not propose PostgreSQL major upgrades automatically",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Move the Dagger CLI, engine and workflow version together",
+      "matchPackageNames": ["dagger/dagger", "dagger"],
+      "groupName": "Dagger"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "pnpm installed globally in the web image",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": ["pnpm@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "datasourceTemplate": "npm",
+      "depNameTemplate": "pnpm"
+    },
+    {
+      "customType": "regex",
+      "description": "Images pinned by tag and digest in the Dagger module",
+      "managerFilePatterns": ["/^ci/.+\\.go$/"],
+      "matchStrings": [
+        "\"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s*// renovate: image"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Tool versions annotated with a renovate comment in the Dagger module",
+      "managerFilePatterns": ["/^ci/.+\\.go$/"],
+      "matchStrings": ["\"(?<currentValue>[^\"]+)\"\\s*// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "Dagger engine version in dagger.json and the workflows",
+      "managerFilePatterns": ["/^dagger\\.json$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "\"engineVersion\": \"v(?<currentValue>[^\"]+)\"",
+        "dagger/dagger-for-github@[a-f0-9]{40} # \\S+\\s+with:\\s+version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "dagger/dagger",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ]
+}

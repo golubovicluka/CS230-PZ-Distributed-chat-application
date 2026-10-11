@@ -1,120 +1,138 @@
-## Installation & Setup
+# Distributed Chat Application
 
-### Prerequisites
+A horizontally scalable chat built for CS230: several Go chat servers hold WebSocket connections, share messages through Redis pub/sub, persist history in PostgreSQL, and are balanced by a small Go load balancer. The React frontend discovers a server, reconnects on failure, and works behind a single public origin.
 
-- **Go**: Version 1.24.5 or higher
-- **Node.js**: Version 18 or higher
-- **npm**: Latest version
-- **Redis**: For message broadcasting (Docker recommended)
+The DevOps roadmap that this repository follows lives in [docs/devops-roadmap.md](docs/devops-roadmap.md).
 
-### 1. Clone the Repository
+## Architecture
 
-```bash
-git clone git@github.com:golubovicluka/CS230-PZ-Distributed-chat-application.git
-cd CS230-PZ-Distributed-chat-application
+```mermaid
+flowchart LR
+    browser[Browser SPA] --> gateway[nginx gateway :8080]
+    gateway -->|/| web[web: nginx + static SPA]
+    gateway -->|/lb/| lb[loadbalancer]
+    gateway -->|/api/| cs1
+    gateway -->|/cs/1/ws| cs1[chatserver-1]
+    gateway -->|/cs/2/ws| cs2[chatserver-2]
+    cs1 & cs2 -->|register + heartbeat| lb
+    cs1 & cs2 <-->|pub/sub fan-out| redis[(Redis)]
+    cs1 & cs2 -->|messages| pg[(PostgreSQL)]
+    cs1 & cs2 & lb -.->|OTLP + profiles| lgtm[otel-lgtm: Grafana, Prometheus, Loki, Tempo, Pyroscope]
 ```
 
-### 2. Start Redis with Docker
+1. The SPA asks the load balancer (`GET /lb/get`) for the least-loaded live chat server.
+2. It opens a WebSocket to that server. Each server stores a message in PostgreSQL, then publishes it to Redis; every server delivers it to its own clients.
+3. Chat servers heartbeat their load every 10s. The load balancer drops servers silent for 30s, and a server deregisters itself before a graceful shutdown.
+4. On shutdown a server becomes unready, deregisters, waits `CHAT_DRAIN_DELAY`, then closes sockets with code 1001; browsers reconnect through the load balancer with jittered backoff and reload history.
 
-Start a Redis container for message broadcasting between chat server instances:
-
-```bash
-docker run -d --name redis-chat -p 6379:6379 redis:latest
-```
-
-### 3. Backend Setup
-
-Install dependencies from the repository's single Go module:
+## Quickstart on macOS
 
 ```bash
-go mod download
+brew bundle          # colima, docker CLI, buildx, compose, mise
+mise install         # pinned Go, Node, pnpm, just and linters
+just colima          # Docker Engine in a Colima VM (no Docker Desktop)
+just up              # build and start everything
+open http://localhost:8080
 ```
 
-### 4. Frontend Setup
+Linux needs only Docker Engine with the buildx and compose plugins plus `mise install`. Details, Colima sizing and troubleshooting are in [docs/local-development.md](docs/local-development.md).
 
-Navigate to the chat-app directory and install dependencies:
+## Observability
 
 ```bash
-cd chat-app
-npm install
+just up-obs
+open http://localhost:3000   # Grafana, no login
 ```
 
-## Running the Application
+All three OpenTelemetry signals and continuous profiles go to a single `grafana/otel-lgtm` container:
 
-### Start the Load Balancer
+- **Traces (Tempo):** one trace follows a message from `chat.message.receive` on the sending server, through the Postgres `INSERT` and Redis `publish`, to `chat.message.fanout` on every server. The W3C trace context travels inside the Redis envelope.
+- **Metrics (Prometheus):** `chat_connections_active`, `chat_messages_received_total`, `chat_messages_delivered_total`, `chat_clients_dropped_total`, `chat_message_fanout_duration_seconds`, `lb_servers_available`, Go runtime metrics, and Redis and Postgres client metrics.
+- **Logs (Loki):** JSON on stdout, also exported over OTLP with trace correlation.
+- **Profiles (Pyroscope):** CPU, allocations, heap and goroutines for both binaries.
+
+Telemetry is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (and, for profiles, `PYROSCOPE_SERVER_ADDRESS`) is set.
+
+## Failure drills
 
 ```bash
-go run ./cmd/loadbalancer
+just crash chatserver-1               # SIGKILL: LB evicts it after 30s, clients reconnect
+docker compose stop chatserver-1      # SIGTERM: deregister, drain 2s, close with 1001
+docker compose start chatserver-1
+just smoke                            # health, config, LB, history through the gateway
 ```
 
-The load balancer listens on port 9000 by default.
-
-### Start Chat Server(s)
-
-In a new terminal, start at least one chat server:
+## Running on the host
 
 ```bash
-go run ./cmd/chatserver
+just deps                 # Postgres and Redis in containers
+just dev-lb               # load balancer on :9000
+just dev-server 8080      # chat server 1
+just dev-server 8081      # chat server 2
+just dev-web              # Vite on http://localhost:5173, proxies /lb and /api
 ```
 
-You can start multiple chat servers on different ports for load balancing:
+## Configuration
 
-```bash
-# Terminal 2
-go run ./cmd/chatserver \
-  -listen 127.0.0.1:8081 \
-  -advertise ws://127.0.0.1:8081
+Every chat server flag can also be set with an environment variable; flags win.
 
-# Terminal 3
-go run ./cmd/chatserver \
-  -listen 127.0.0.1:8082 \
-  -advertise ws://127.0.0.1:8082
-```
+| Flag | Environment | Default | Purpose |
+| --- | --- | --- | --- |
+| `-name` | `CHAT_SERVER_NAME` | hostname | Name stored with messages and logs |
+| `-listen` | `CHAT_LISTEN` | `127.0.0.1:8080` | HTTP and WebSocket listen address |
+| `-advertise` | `CHAT_ADVERTISE` | `ws://127.0.0.1:8080` | `ws(s)://` URL or same-origin path such as `/cs/1` sent to clients by the LB |
+| `-db` | `DATABASE_URL` | `postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable` | PostgreSQL URL; migrations run at startup |
+| `-redis` | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
+| `-redis-channel` | `REDIS_CHANNEL` | `chat-messages` | Pub/sub channel |
+| `-registry` | `REGISTRY_URL` | `http://127.0.0.1:9000` | Load balancer URL; empty disables registration |
+| `-heartbeat` | `CHAT_HEARTBEAT_INTERVAL` | `10s` | Load report interval |
+| `-allowed-origins` | `CHAT_ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Cross-origin browsers allowed besides same-origin |
+| `-drain-delay` | `CHAT_DRAIN_DELAY` | `0s` | Time spent unready before closing sockets on SIGTERM |
 
-### Start the Frontend
+The load balancer takes `-address` (`:9000`), `-server-ttl` (`30s`), `-allowed-origins` and HTTP timeout flags. Both binaries expose `GET /healthz`; chat servers also expose `GET /readyz`, which checks Postgres and Redis and fails while draining.
 
-In a new terminal:
+## Development commands
 
-```bash
-cd chat-app
-npm run dev
-```
+`just` lists every recipe. The common ones:
 
-The React application will start on http://localhost:5173
+| Command | What it does |
+| --- | --- |
+| `just ci` | Every CI check through Dagger, exactly as GitHub Actions runs it |
+| `just test` | Go unit tests with the race detector |
+| `just test-integration` | All Go tests against the Compose Postgres and Redis |
+| `just lint` | golangci-lint, gofmt/goimports, ESLint, tsc, yamllint, markdownlint, shellcheck, gitleaks |
+| `just images-scan` | Builds all images for amd64 and arm64, then gates on fixable critical CVEs |
+| `just act` | Runs the GitHub `ci` workflow locally with act |
+| `just verify-image <ref>` | Checks the cosign signature and SBOM attestation of a published image |
+| `just hooks` | Enables the pre-commit hook (gitleaks on staged changes, Go formatting) |
 
-## Development Commands
+Dependency updates are proposed by Renovate (`renovate.json`) once the Renovate GitHub App is enabled for the repository.
 
-### Frontend
+## CI and supply chain
 
-```bash
-npm run dev      # Start development server with hot reload
-npm run build    # Build for production
-npm run lint     # Run ESLint linter
-npm run preview  # Preview production build
-```
+The pipeline is a Dagger module in `ci/` (Go SDK). GitHub Actions only installs Dagger and calls it, so `just ci` on a laptop runs the same containers as CI.
 
-### Backend
+| Check | What it enforces |
+| --- | --- |
+| `go-lint` | golangci-lint, Go formatting, `go mod tidy` |
+| `go-test` | All Go tests with `-race` against PostgreSQL and Redis service containers |
+| `web` | ESLint, `tsc -b` and the production build |
+| `yaml`, `markdown`, `shell`, `workflows` | yamllint, markdownlint, shellcheck and actionlint |
+| `secrets` | gitleaks over the working tree and git history |
+| `config` | Trivy misconfiguration scan of Dockerfiles, HIGH and CRITICAL fail |
+| `images` | Builds all three images for amd64 and arm64; Grype fails on fixable critical CVEs |
 
-```bash
-go fmt ./...          # Format all Go packages
-go vet ./...          # Run the standard static checks
-go test ./...         # Run every backend test
-go test -race ./...   # Run every test with the race detector
-go build ./...        # Compile both commands and all packages
-go mod tidy -diff     # Verify that module metadata is tidy
-```
+- **SBOM precision:** the CVE gate uses a Syft SBOM that captures Go function symbols. Grype then flags a Go CVE only when the vulnerable function is actually in the binary.
+- **Releases:** on `main` and `v*` tags, `release.yaml` pushes multi-arch images to `ghcr.io/golubovicluka/chat-*`. It signs them keyless with cosign through GitHub OIDC and attaches an SPDX SBOM attestation.
+- **Pinning:** every GitHub Action is pinned to a commit SHA and every tool image to a digest; Renovate updates both. This is a direct response to the March 2026 Trivy compromise (CVE-2026-33634), when attackers force-pushed `trivy-action` version tags to credential-stealing code.
 
-No external test framework, mock generator, or linter is required.
+## Backend design
 
-## Backend Design (Refactoring)
-
-The backend keeps the design explicit and shallow:
-
-- `cmd/chatserver` and `cmd/loadbalancer` are composition roots. They parse configuration, create concrete dependencies, and own startup and graceful shutdown.
-- `internal/chat` owns chat sessions. One hub goroutine owns client membership; registration, removal, Redis broadcasts, and load snapshots move through channels.
-- `internal/sqlite` returns a concrete message store and keeps all SQL, row mapping, ordering, and database errors in one place.
-- `internal/registry` returns a concrete, bounded HTTP client for chat-server registration and load reports.
-- `internal/loadbalancer` uses a small `sync.RWMutex` for its short in-memory registry critical section, where a mutex is clearer than an actor process.
+- `cmd/chatserver` and `cmd/loadbalancer` are composition roots. They parse configuration, create concrete dependencies, set up telemetry, and own startup and graceful shutdown.
+- `internal/chat` owns chat sessions. One hub goroutine owns client membership; registration, removal, broker broadcasts and load snapshots move through channels.
+- `internal/postgres` returns a concrete message store backed by a pgx pool. Embedded goose migrations run under an advisory lock, so several servers can start at once.
+- `internal/registry` reports load to the load balancer. Its heartbeat serializes reports so a stale load never overwrites a newer one, and it stops reporting once the server deregisters.
+- `internal/loadbalancer` keeps the latest report per server under a `sync.RWMutex` and ignores entries older than the TTL.
+- `internal/httpapi` holds the origin allowlist (CORS and WebSocket `CheckOrigin`) and the health and readiness handlers.
+- `internal/telemetry` installs OpenTelemetry providers and the Pyroscope profiler from standard environment variables.
 - Consumer packages accept narrow interfaces only where production and test adapters both exist. Constructors return concrete structs.
-
-The necessary runtime adapters remain Gorilla WebSocket, the SQLite driver, and the Redis client; HTTP routing, lifecycle management, concurrency, logging, configuration, and tests use Go's standard library.

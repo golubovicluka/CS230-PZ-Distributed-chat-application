@@ -1,4 +1,8 @@
 // Package loadbalancer selects the least-loaded registered chat server.
+//
+// Chat servers report their load periodically. Entries that have not been
+// refreshed within the configured TTL are treated as dead and are never
+// selected, so a crashed server stops receiving new clients on its own.
 package loadbalancer
 
 import (
@@ -10,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 const maxRequestBodyBytes int64 = 64 << 10
@@ -36,21 +41,34 @@ type serverInfo struct {
 	load    int
 }
 
+type serverState struct {
+	load     int
+	lastSeen time.Time
+}
+
 // LoadBalancer stores the latest reported load for each chat server.
 type LoadBalancer struct {
 	mu      sync.RWMutex
-	servers map[string]int
+	servers map[string]serverState
+	ttl     time.Duration
+	now     func() time.Time
 	logger  *log.Logger
 }
 
-// New constructs an empty LoadBalancer. Logger must not be nil.
-func New(logger *log.Logger) *LoadBalancer {
+// New constructs an empty LoadBalancer whose entries expire after ttl
+// without a report. Logger must not be nil and ttl must be positive.
+func New(logger *log.Logger, ttl time.Duration) *LoadBalancer {
 	if logger == nil {
 		panic("loadbalancer: logger must not be nil")
 	}
+	if ttl <= 0 {
+		panic("loadbalancer: ttl must be positive")
+	}
 
 	return &LoadBalancer{
-		servers: make(map[string]int),
+		servers: make(map[string]serverState),
+		ttl:     ttl,
+		now:     time.Now,
 		logger:  logger,
 	}
 }
@@ -60,6 +78,7 @@ func (lb *LoadBalancer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /register", lb.handleRegister)
 	mux.HandleFunc("POST /update", lb.handleUpdate)
+	mux.HandleFunc("POST /deregister", lb.handleDeregister)
 	mux.HandleFunc("GET /get", lb.handleGet)
 	return mux
 }
@@ -83,6 +102,18 @@ func (lb *LoadBalancer) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	lb.upsert(server)
 	lb.logger.Printf("updated server %s to load %d", server.address, server.load)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (lb *LoadBalancer) handleDeregister(w http.ResponseWriter, r *http.Request) {
+	server, ok := lb.readServer(w, r)
+	if !ok {
+		return
+	}
+
+	if lb.remove(server.address) {
+		lb.logger.Printf("deregistered server %s", server.address)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -161,19 +192,57 @@ func requestErrorResponse(err error) (int, string) {
 }
 
 func (lb *LoadBalancer) upsert(server serverInfo) {
+	now := lb.now()
 	lb.mu.Lock()
-	lb.servers[server.address] = server.load
+	for address, state := range lb.servers {
+		if lb.expired(state, now) {
+			delete(lb.servers, address)
+		}
+	}
+	lb.servers[server.address] = serverState{load: server.load, lastSeen: now}
 	lb.mu.Unlock()
 }
 
+func (lb *LoadBalancer) remove(address string) bool {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	_, existed := lb.servers[address]
+	delete(lb.servers, address)
+	return existed
+}
+
+func (lb *LoadBalancer) expired(state serverState, now time.Time) bool {
+	return now.Sub(state.lastSeen) > lb.ttl
+}
+
+// Available returns the number of servers that reported within the TTL.
+func (lb *LoadBalancer) Available() int {
+	now := lb.now()
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+
+	available := 0
+	for _, state := range lb.servers {
+		if !lb.expired(state, now) {
+			available++
+		}
+	}
+	return available
+}
+
 func (lb *LoadBalancer) leastLoaded() (serverInfo, bool) {
+	now := lb.now()
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
 	var best serverInfo
 	found := false
-	for address, load := range lb.servers {
-		server := serverInfo{address: address, load: load}
+	for address, state := range lb.servers {
+		if lb.expired(state, now) {
+			continue
+		}
+		server := serverInfo{address: address, load: state.load}
 		if !found || server.load < best.load || (server.load == best.load && server.address < best.address) {
 			best = server
 			found = true

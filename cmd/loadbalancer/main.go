@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -15,12 +16,19 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/golubovicluka/CS230-PZ-Distributed-chat-application/internal/httpapi"
 	"github.com/golubovicluka/CS230-PZ-Distributed-chat-application/internal/loadbalancer"
+	"github.com/golubovicluka/CS230-PZ-Distributed-chat-application/internal/telemetry"
 )
 
 type config struct {
 	address           string
+	allowedOrigins    string
+	serverTTL         time.Duration
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
@@ -31,6 +39,8 @@ type config struct {
 func defaultConfig() config {
 	return config{
 		address:           ":9000",
+		allowedOrigins:    "http://localhost:5173,http://127.0.0.1:5173",
+		serverTTL:         30 * time.Second,
 		readHeaderTimeout: 5 * time.Second,
 		readTimeout:       15 * time.Second,
 		writeTimeout:      15 * time.Second,
@@ -40,17 +50,16 @@ func defaultConfig() config {
 }
 
 func main() {
-	logger := log.New(os.Stderr, "[LB] ", log.LstdFlags)
-	if err := execute(os.Args[1:], os.Stderr, logger); err != nil {
+	if err := execute(os.Args[1:], os.Stderr); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		logger.Printf("stopped: %v", err)
+		log.Printf("load balancer stopped: %v", err)
 		os.Exit(1)
 	}
 }
 
-func execute(args []string, flagOutput io.Writer, logger *log.Logger) error {
+func execute(args []string, flagOutput io.Writer) (err error) {
 	configuration, err := parseConfig(args, flagOutput)
 	if err != nil {
 		return err
@@ -59,6 +68,19 @@ func execute(args []string, flagOutput io.Writer, logger *log.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	instrumentation, err := telemetry.Setup(ctx, "loadbalancer")
+	if err != nil {
+		return fmt.Errorf("set up telemetry: %w", err)
+	}
+	defer func() {
+		flushContext, cancel := context.WithTimeout(context.Background(), configuration.shutdownTimeout)
+		defer cancel()
+		if flushErr := instrumentation.Shutdown(flushContext); flushErr != nil {
+			err = errors.Join(err, fmt.Errorf("flush telemetry: %w", flushErr))
+		}
+	}()
+
+	logger := slog.NewLogLogger(instrumentation.Handler, slog.LevelInfo)
 	if err := run(ctx, configuration, logger); err != nil {
 		return fmt.Errorf("run load balancer: %w", err)
 	}
@@ -70,6 +92,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags := flag.NewFlagSet("loadbalancer", flag.ContinueOnError)
 	flags.SetOutput(output)
 	flags.StringVar(&configuration.address, "address", configuration.address, "HTTP listen address")
+	flags.StringVar(&configuration.allowedOrigins, "allowed-origins", configuration.allowedOrigins, "comma-separated browser origins allowed by CORS")
+	flags.DurationVar(&configuration.serverTTL, "server-ttl", configuration.serverTTL, "time after the last report before a chat server is considered dead")
 	flags.DurationVar(&configuration.readHeaderTimeout, "read-header-timeout", configuration.readHeaderTimeout, "maximum time to read request headers")
 	flags.DurationVar(&configuration.readTimeout, "read-timeout", configuration.readTimeout, "maximum time to read a request")
 	flags.DurationVar(&configuration.writeTimeout, "write-timeout", configuration.writeTimeout, "maximum time to write a response")
@@ -94,10 +118,15 @@ func (configuration config) validate() error {
 		return errors.New("address must not be empty")
 	}
 
+	if _, err := httpapi.ParseOrigins(configuration.allowedOrigins); err != nil {
+		return fmt.Errorf("allowed-origins: %w", err)
+	}
+
 	timeouts := []struct {
 		name  string
 		value time.Duration
 	}{
+		{name: "server-ttl", value: configuration.serverTTL},
 		{name: "read-header-timeout", value: configuration.readHeaderTimeout},
 		{name: "read-timeout", value: configuration.readTimeout},
 		{name: "write-timeout", value: configuration.writeTimeout},
@@ -124,17 +153,38 @@ func run(ctx context.Context, configuration config, logger *log.Logger) error {
 		return fmt.Errorf("validate configuration: %w", err)
 	}
 
-	balancer := loadbalancer.New(logger)
+	origins, err := httpapi.ParseOrigins(configuration.allowedOrigins)
+	if err != nil {
+		return fmt.Errorf("parse allowed origins: %w", err)
+	}
+
+	balancer := loadbalancer.New(logger, configuration.serverTTL)
+	if _, err := otel.Meter("github.com/golubovicluka/CS230-PZ-Distributed-chat-application/cmd/loadbalancer").Int64ObservableGauge(
+		"lb.servers.available",
+		metric.WithDescription("Chat servers that reported within the TTL."),
+		metric.WithUnit("{server}"),
+		metric.WithInt64Callback(func(_ context.Context, observer metric.Int64Observer) error {
+			observer.Observe(int64(balancer.Available()))
+			return nil
+		}),
+	); err != nil {
+		return fmt.Errorf("register available-servers gauge: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", balancer.Handler())
+	mux.Handle("GET /healthz", httpapi.Liveness())
 	server := &http.Server{
 		Addr:              configuration.address,
-		Handler:           httpapi.CORS(balancer.Handler()),
+		Handler:           otelhttp.NewHandler(httpapi.CORS(origins, mux), "loadbalancer", otelhttp.WithFilter(skipHeartbeats)),
 		ReadHeaderTimeout: configuration.readHeaderTimeout,
 		ReadTimeout:       configuration.readTimeout,
 		WriteTimeout:      configuration.writeTimeout,
 		IdleTimeout:       configuration.idleTimeout,
 		ErrorLog:          logger,
 	}
-	listener, err := net.Listen("tcp", configuration.address)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", configuration.address)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", configuration.address, err)
 	}
@@ -172,4 +222,10 @@ func run(ctx context.Context, configuration config, logger *log.Logger) error {
 	}
 	logger.Printf("shutdown complete")
 	return nil
+}
+
+// skipHeartbeats keeps health checks and the periodic load reports out of the
+// traces; selections and registrations stay visible.
+func skipHeartbeats(r *http.Request) bool {
+	return r.URL.Path != "/healthz" && r.URL.Path != "/update"
 }

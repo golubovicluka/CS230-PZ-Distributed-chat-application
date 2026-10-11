@@ -2,23 +2,24 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-
-interface Message {
-  id?: number
-  username: string
-  content: string
-  server?: string
-  timestamp?: string
-}
+import type { ChatMessage, ConnectionState } from "@/types"
 
 interface ChatRoomProps {
   username: string
-  messages: Message[]
+  messages: ChatMessage[]
+  connectionState: ConnectionState
   onSendMessage: (message: string) => void
   onDisconnect: () => void
 }
 
-export function ChatRoom({ username, messages, onSendMessage, onDisconnect }: ChatRoomProps) {
+const statusText: Record<ConnectionState, string> = {
+  connecting: "Connecting to a chat server...",
+  reconnecting: "Connection lost. Reconnecting...",
+  open: "",
+  closed: "Disconnected",
+}
+
+export function ChatRoom({ username, messages, connectionState, onSendMessage, onDisconnect }: ChatRoomProps) {
   const [newMessage, setNewMessage] = useState("")
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -58,6 +59,9 @@ export function ChatRoom({ username, messages, onSendMessage, onDisconnect }: Ch
           <div>
             <CardTitle>Chat Room</CardTitle>
             <p className="text-sm text-muted-foreground">Welcome, {username}!</p>
+            {connectionState !== "open" && (
+              <p role="status" className="text-sm text-amber-600">{statusText[connectionState]}</p>
+            )}
           </div>
           <Button variant="outline" onClick={onDisconnect}>
             Disconnect
@@ -66,15 +70,10 @@ export function ChatRoom({ username, messages, onSendMessage, onDisconnect }: Ch
         <CardContent className="flex flex-col h-[calc(100vh-8rem)]">
           <div className="flex-1 overflow-y-auto space-y-3 p-4 bg-muted/50 rounded-lg mb-4">
             {messages && messages.length > 0 ? (
-              messages.map((message, index) => {
-              // Create a unique key using multiple fallbacks
-              const messageKey = message.id ||
-                `${message.username}-${message.timestamp}-${index}` ||
-                `msg-${Date.now()}-${index}`
-
+              messages.map((message) => {
               return (
                 <div
-                  key={messageKey}
+                  key={message.id}
                   className={`flex flex-col space-y-1 ${message.username === username ? "items-end" : "items-start"
                     }`}
                 >
@@ -85,7 +84,7 @@ export function ChatRoom({ username, messages, onSendMessage, onDisconnect }: Ch
                       }`}
                   >
                     <p className="text-sm font-medium">{message.username}</p>
-                    <p>{typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}</p>
+                    <p>{message.content}</p>
                     {message.timestamp && (
                       <p className="text-xs opacity-70 mt-1">
                         {formatTimestamp(message.timestamp)}
@@ -112,7 +111,7 @@ export function ChatRoom({ username, messages, onSendMessage, onDisconnect }: Ch
               onKeyDown={handleKeyPress}
               className="flex-1"
             />
-            <Button type="submit" disabled={!newMessage.trim()}>
+            <Button type="submit" disabled={!newMessage.trim() || connectionState !== "open"}>
               Send
             </Button>
           </form>

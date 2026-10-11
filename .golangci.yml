@@ -1,0 +1,42 @@
+version: "2"
+
+run:
+  # CI loads packages from a cold module cache while image builds share the runner.
+  timeout: 15m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - unconvert
+    - usestdlibvars
+  exclusions:
+    presets:
+      - std-error-handling
+    paths:
+      - ^ci/
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  # The Dagger module in ci/ depends on generated code that only exists inside
+  # the Dagger engine, so goimports would invent imports for it. It is checked
+  # with plain gofmt by the go-lint check instead.
+  exclusions:
+    paths:
+      - ^ci/
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/golubovicluka/CS230-PZ-Distributed-chat-application

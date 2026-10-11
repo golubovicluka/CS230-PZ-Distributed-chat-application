@@ -1,0 +1,12 @@
+title = "Distributed chat secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local development credentials that are intentionally public"
+regexes = ['''postgres://chat:chat@''']
+
+[[allowlists]]
+description = "Lockfile integrity hashes"
+paths = ['''chat-app/pnpm-lock\.yaml''']

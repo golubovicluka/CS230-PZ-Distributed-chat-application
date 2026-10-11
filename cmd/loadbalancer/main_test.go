@@ -28,6 +28,8 @@ func TestParseConfig(t *testing.T) {
 			name: "explicit values",
 			args: []string{
 				"-address=127.0.0.1:9100",
+				"-allowed-origins=https://chat.example.com",
+				"-server-ttl=6s",
 				"-read-header-timeout=1s",
 				"-read-timeout=2s",
 				"-write-timeout=3s",
@@ -36,6 +38,8 @@ func TestParseConfig(t *testing.T) {
 			},
 			want: config{
 				address:           "127.0.0.1:9100",
+				allowedOrigins:    "https://chat.example.com",
+				serverTTL:         6 * time.Second,
 				readHeaderTimeout: time.Second,
 				readTimeout:       2 * time.Second,
 				writeTimeout:      3 * time.Second,
@@ -44,6 +48,8 @@ func TestParseConfig(t *testing.T) {
 			},
 		},
 		{name: "empty address", args: []string{"-address= "}, wantError: "address must not be empty"},
+		{name: "invalid origin", args: []string{"-allowed-origins=chat.example.com"}, wantError: "allowed-origins"},
+		{name: "zero server ttl", args: []string{"-server-ttl=0s"}, wantError: "server-ttl must be positive"},
 		{name: "zero timeout", args: []string{"-read-timeout=0s"}, wantError: "read-timeout must be positive"},
 		{name: "negative timeout", args: []string{"-shutdown-timeout=-1s"}, wantError: "shutdown-timeout must be positive"},
 		{name: "invalid duration", args: []string{"-idle-timeout=soon"}, wantError: "parse flags"},
@@ -83,6 +89,7 @@ func TestConfigValidateRejectsEveryNonPositiveTimeout(t *testing.T) {
 		name   string
 		change func(*config)
 	}{
+		{name: "server ttl", change: func(configuration *config) { configuration.serverTTL = 0 }},
 		{name: "read header", change: func(configuration *config) { configuration.readHeaderTimeout = 0 }},
 		{name: "read", change: func(configuration *config) { configuration.readTimeout = 0 }},
 		{name: "write", change: func(configuration *config) { configuration.writeTimeout = 0 }},
