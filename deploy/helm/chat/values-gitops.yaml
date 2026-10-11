@@ -1,0 +1,12 @@
+hostname: gitops.chat.localhost
+
+imagePullPolicy: Always
+
+chatserver:
+  replicas: 2
+
+web:
+  replicas: 1
+
+database:
+  instances: 1

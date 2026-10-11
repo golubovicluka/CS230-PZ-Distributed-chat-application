@@ -1,0 +1,6 @@
+apiVersion: v2
+name: chat
+description: Distributed chat on Kubernetes behind Envoy Gateway, with CloudNativePG and Redis
+type: application
+version: 0.1.0
+appVersion: main

@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+    app.kubernetes.io/name: web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chat.selector" "web" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chat.selector" "web" | nindent 8 }}
+    spec:
+      serviceAccountName: chat
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "chat.podSecurityContext" . | nindent 8 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "chat.selector" "web" | nindent 14 }}
+      containers:
+        - name: web
+          image: {{ include "chat.image" .Values.web.image | quote }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CHAT_DISCOVERY
+              value: direct
+            - name: CHAT_LB_URL
+              value: ""
+            - name: CHAT_HISTORY_URL
+              value: /api/history
+            - name: CHAT_WS_PATH
+              value: /ws
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          securityContext:
+            {{- include "chat.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 101
+            runAsGroup: 101
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: nginx-conf
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "chat.selector" "web" | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "chat.selector" "web" | nindent 6 }}

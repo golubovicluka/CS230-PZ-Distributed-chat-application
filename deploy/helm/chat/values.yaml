@@ -1,0 +1,60 @@
+hostname: chat.localhost
+
+gateway:
+  name: chat
+  namespace: gateway
+  sectionName: https
+
+imagePullPolicy: IfNotPresent
+
+chatserver:
+  image:
+    repository: ghcr.io/golubovicluka/chat-chatserver
+    tag: main
+  replicas: 2
+  drainDelay: 5s
+  allowedOrigins: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+web:
+  image:
+    repository: ghcr.io/golubovicluka/chat-web
+    tag: main
+  replicas: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+
+redis:
+  image:
+    repository: redis
+    tag: 8.8-alpine@sha256:0b2b77d3ea5078274795e3177cdbdada8b96316684a38911d528534ed679b5ec
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+database:
+  instances: 2
+  storage: 1Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+redisSecret:
+  store: openbao
+  key: redis
+  refreshInterval: 1h

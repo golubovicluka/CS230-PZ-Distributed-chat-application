@@ -4,6 +4,9 @@ pnpm := "pnpm --dir chat-app"
 local_db := "postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable"
 otel_env := "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-lgtm:4318 PYROSCOPE_SERVER_ADDRESS=http://otel-lgtm:4040"
 release_identity := "^https://github.com/golubovicluka/CS230-PZ-Distributed-chat-application/\\.github/workflows/release\\.yaml@"
+repo_url := "https://github.com/golubovicluka/CS230-PZ-Distributed-chat-application.git"
+kube := "kubectl --context kind-chat"
+docker_host := "export DOCKER_HOST=\"$(docker context inspect --format '{{.Endpoints.docker.Host}}')\""
 
 # List recipes
 default:
@@ -37,6 +40,13 @@ doctor:
     @dagger version
     @act --version
     @cosign version 2>&1 | grep GitVersion
+    @tofu version | head -1
+    @kind version
+    @kubectl version --client | head -1
+    @helm version --short
+    @tilt version
+    @k9s version --short | head -1
+    @kubeconform -v
 
 # Build and start the full stack: http://localhost:8080
 up:
@@ -158,3 +168,127 @@ images-all:
 # Point git at the versioned hooks in .githooks
 hooks:
     git config core.hooksPath .githooks
+
+# Create the kind cluster, zot registry and Argo CD platform, then configure OpenBao
+cluster rev=`git rev-parse --abbrev-ref HEAD` repo=repo_url:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${CI:-}" ]] && ! git ls-remote --exit-code origin "{{ rev }}" >/dev/null 2>&1 && [[ -z "$(git branch -r --contains "{{ rev }}" 2>/dev/null)" ]]; then
+      echo "Argo CD syncs the platform from GitHub: push {{ rev }} first" >&2
+      exit 1
+    fi
+    ca="$(scripts/local-ca.sh)"
+    {{ docker_host }}
+    tofu -chdir=infra/local init -input=false
+    tofu -chdir=infra/local apply -input=false -auto-approve \
+      -var "git_revision={{ rev }}" -var "repo_url={{ repo }}" \
+      -var "ca_cert_path=$ca/ca.crt" -var "ca_key_path=$ca/ca.key"
+    kubectl config use-context kind-chat
+    just platform-wait
+    just cluster-secrets
+
+# Delete the cluster and the registry container (the registry volume stays as a cache)
+cluster-down:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ca="$(scripts/local-ca.sh)"
+    {{ docker_host }}
+    rm -f infra/secrets/terraform.tfstate infra/secrets/terraform.tfstate.backup
+    tofu -chdir=infra/local destroy -input=false -auto-approve \
+      -var "ca_cert_path=$ca/ca.crt" -var "ca_key_path=$ca/ca.key"
+
+# Wait until every platform Application is Synced and Healthy
+platform-wait timeout="900":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    deadline=$((SECONDS + {{ timeout }}))
+    for app in cert-manager envoy-gateway cloudnative-pg openbao external-secrets platform-config headlamp; do
+      until [[ "$({{ kube }} -n argocd get application "$app" -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)" == "Synced/Healthy" ]]; do
+        if ((SECONDS >= deadline)); then
+          echo "timed out waiting for $app" >&2
+          {{ kube }} -n argocd get applications >&2
+          exit 1
+        fi
+        sleep 5
+      done
+      echo "ok   $app"
+    done
+
+# Configure OpenBao (kv, policy, Kubernetes auth, Redis password) with OpenTofu
+cluster-secrets:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ kube }} -n openbao rollout status statefulset/openbao --timeout=300s
+    {{ kube }} -n openbao port-forward svc/openbao 18200:8200 >/dev/null &
+    forward=$!
+    trap 'kill "$forward"' EXIT
+    for _ in $(seq 30); do
+      curl -fsS -o /dev/null http://127.0.0.1:18200/v1/sys/health && break
+      sleep 1
+    done
+    tofu -chdir=infra/secrets init -input=false
+    tofu -chdir=infra/secrets apply -input=false -auto-approve
+    {{ kube }} annotate clustersecretstore openbao "chat.localhost/configured-at=$(date +%s)" --overwrite
+    {{ kube }} wait clustersecretstore/openbao --for=condition=Ready --timeout=120s
+
+# Inner loop on the cluster: build to zot, deploy the chart, watch for changes
+dev:
+    tilt up
+
+# Build and deploy once, then exit when everything is ready (used by CI)
+dev-ci timeout="20m":
+    tilt ci --timeout {{ timeout }}
+
+# Trust the local development CA (macOS login keychain or the Linux system store)
+trust-ca:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ca="$(scripts/local-ca.sh)/ca.crt"
+    case "$(uname -s)" in
+      Darwin) security add-trusted-cert -r trustRoot -k "$HOME/Library/Keychains/login.keychain-db" "$ca" ;;
+      Linux) sudo install -m 0644 "$ca" /usr/local/share/ca-certificates/chat-localhost.crt && sudo update-ca-certificates ;;
+      *) echo "add $ca to your trust store manually" >&2; exit 1 ;;
+    esac
+
+# Smoke-test the cluster through Envoy over HTTPS
+k8s-smoke base="https://chat.localhost":
+    scripts/smoke.sh {{ base }} "$(scripts/local-ca.sh)/ca.crt"
+
+# End-to-end WebSocket test against the cluster
+e2e base="https://chat.localhost":
+    E2E_BASE_URL={{ base }} E2E_CA_FILE="$(scripts/local-ca.sh)/ca.crt" go test -tags e2e -count=1 -v ./test/e2e/
+
+# Restart the chat servers under an open socket; expect a 1001 close and a clean reconnect
+e2e-drain base="https://chat.localhost":
+    E2E_BASE_URL={{ base }} E2E_CA_FILE="$(scripts/local-ca.sh)/ca.crt" \
+      E2E_RESTART_CMD="{{ kube }} -n chat rollout restart deployment/chatserver" \
+      go test -tags e2e -count=1 -v -run TestGracefulDrain ./test/e2e/
+
+# Print the initial Argo CD admin password
+argocd-password:
+    @{{ kube }} -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+
+# Print a 24h Headlamp login token
+headlamp-token:
+    @{{ kube }} -n headlamp create token headlamp --duration 24h
+
+# Let Argo CD deploy the chart from main with the published GHCR images
+gitops:
+    {{ kube }} apply -f deploy/argocd/apps/chat.yaml
+
+# Remove the GitOps deployment
+gitops-off:
+    {{ kube }} delete -f deploy/argocd/apps/chat.yaml --ignore-not-found
+
+# Write provider lock files for macOS and Linux on both architectures
+tofu-lock:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for dir in infra/local infra/secrets; do
+      tofu -chdir="$dir" init -backend=false -input=false
+      tofu -chdir="$dir" providers lock -platform=darwin_arm64 -platform=darwin_amd64 -platform=linux_amd64 -platform=linux_arm64
+    done
+
+# Open k9s on the cluster
+k9s:
+    k9s --context kind-chat

@@ -1,0 +1,9 @@
+chatserver:
+  image:
+    repository: chat-chatserver
+    tag: ""
+
+web:
+  image:
+    repository: chat-web
+    tag: ""

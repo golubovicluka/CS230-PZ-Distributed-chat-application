@@ -3,6 +3,7 @@ extends: default
 ignore: |
   chat-app/node_modules/
   chat-app/pnpm-lock.yaml
+  deploy/helm/*/templates/
 
 rules:
   document-start: disable
