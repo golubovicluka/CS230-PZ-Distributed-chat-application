@@ -117,6 +117,23 @@ resource "docker_container" "registry" {
     container_path = "/var/lib/registry"
   }
 
+  upload {
+    file = "/etc/zot/config.json"
+    content = jsonencode({
+      storage = {
+        rootDirectory = "/var/lib/registry"
+      }
+      http = {
+        address = "0.0.0.0"
+        port    = "5000"
+        compat  = ["docker2s2"]
+      }
+      log = {
+        level = "info"
+      }
+    })
+  }
+
   depends_on = [kind_cluster.this]
 }
 

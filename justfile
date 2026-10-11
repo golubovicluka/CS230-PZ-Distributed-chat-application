@@ -225,7 +225,7 @@ cluster-secrets:
     forward=$!
     trap 'kill "$forward"' EXIT
     for _ in $(seq 30); do
-      curl -fsS -o /dev/null http://127.0.0.1:18200/v1/sys/health && break
+      curl -fs -o /dev/null http://127.0.0.1:18200/v1/sys/health && break
       sleep 1
     done
     tofu -chdir=infra/secrets init -input=false
