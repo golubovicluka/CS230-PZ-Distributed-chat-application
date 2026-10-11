@@ -24,6 +24,7 @@ Notes from implementing Phase 2:
 - **SBOM formats:** the CVE gate uses a Syft-native SBOM with Go function symbols, because SPDX does not carry them. The published and attested SBOM is SPDX.
 - **Web image user:** it now declares `USER 101:101` explicitly, which Trivy's DS-0002 requires and which Kubernetes `runAsNonRoot` needs in Phase 4.
 - **actionlint:** added as a check. It is not on the original list, but it catches workflow mistakes that yamllint cannot.
+- **First real CI run:** the Grype gate failed the build on GO-2026-6612 (CVE-2026-78663), a critical HTTP/2 flow-control bypass in `golang.org/x/net` v0.59.0, pulled in indirectly through gRPC and the OTLP exporters. The fix was a bump to v0.61.0. The same run exposed a telemetry test that Dagger's injected `OTEL_EXPORTER_OTLP_*` variables could break; it now isolates its environment.
 
 ## Context
 

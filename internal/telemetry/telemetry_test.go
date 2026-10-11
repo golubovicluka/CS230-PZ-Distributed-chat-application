@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,9 +13,25 @@ import (
 	"go.opentelemetry.io/otel"
 )
 
+// isolateTelemetryEnv removes every OTEL_* and PYROSCOPE_* variable for the
+// test, restoring them afterwards. Signal-specific variables such as
+// OTEL_EXPORTER_OTLP_METRICS_ENDPOINT override the generic endpoint, and CI
+// runners like Dagger inject them into every container.
+func isolateTelemetryEnv(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "OTEL_") || strings.HasPrefix(key, "PYROSCOPE_") {
+			t.Setenv(key, value)
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatalf("unset %s: %v", key, err)
+			}
+		}
+	}
+}
+
 func TestSetupWithoutEndpointInstallsNoExporters(t *testing.T) {
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-	t.Setenv("PYROSCOPE_SERVER_ADDRESS", "")
+	isolateTelemetryEnv(t)
 
 	telemetry, err := Setup(context.Background(), "test-service")
 	if err != nil {
@@ -31,9 +49,9 @@ func TestSetupWithoutEndpointInstallsNoExporters(t *testing.T) {
 }
 
 func TestSetupHonorsSDKDisabled(t *testing.T) {
+	isolateTelemetryEnv(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4318")
 	t.Setenv("OTEL_SDK_DISABLED", "true")
-	t.Setenv("PYROSCOPE_SERVER_ADDRESS", "")
 
 	telemetry, err := Setup(context.Background(), "test-service")
 	if err != nil {
@@ -54,9 +72,8 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	}))
 	defer collector.Close()
 
+	isolateTelemetryEnv(t)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
-	t.Setenv("OTEL_SDK_DISABLED", "")
-	t.Setenv("PYROSCOPE_SERVER_ADDRESS", "")
 
 	telemetry, err := Setup(context.Background(), "test-service")
 	if err != nil {

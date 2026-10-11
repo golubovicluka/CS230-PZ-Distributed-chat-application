@@ -1,7 +1,8 @@
 version: "2"
 
 run:
-  timeout: 5m
+  # CI loads packages from a cold module cache while image builds share the runner.
+  timeout: 15m
 
 linters:
   default: standard
