@@ -1,3 +1,8 @@
 CLAUDE.md
 /.claude
 sbom-*.spdx.json
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+tilt_modules/
