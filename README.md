@@ -83,6 +83,7 @@ Every chat server flag can also be set with an environment variable; flags win.
 | `-advertise` | `CHAT_ADVERTISE` | `ws://127.0.0.1:8080` | `ws(s)://` URL or same-origin path such as `/cs/1` sent to clients by the LB |
 | `-db` | `DATABASE_URL` | `postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable` | PostgreSQL URL; migrations run at startup |
 | `-redis` | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
+| none | `REDIS_PASSWORD` | empty | Redis password; environment only, so it never shows up in process arguments |
 | `-redis-channel` | `REDIS_CHANNEL` | `chat-messages` | Pub/sub channel |
 | `-registry` | `REGISTRY_URL` | `http://127.0.0.1:9000` | Load balancer URL; empty disables registration |
 | `-heartbeat` | `CHAT_HEARTBEAT_INTERVAL` | `10s` | Load report interval |

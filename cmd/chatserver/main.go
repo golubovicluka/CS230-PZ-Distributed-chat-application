@@ -45,6 +45,7 @@ type config struct {
 	advertisedURL     string
 	databaseURL       string
 	redisAddress      string
+	redisPassword     string
 	redisChannel      string
 	registryBaseURL   string
 	heartbeatInterval time.Duration
@@ -126,6 +127,7 @@ func parseConfig(args []string, lookupEnv func(string) (string, bool), output io
 		advertisedURL:     env("CHAT_ADVERTISE", "ws://127.0.0.1:8080"),
 		databaseURL:       env("DATABASE_URL", "postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable"),
 		redisAddress:      env("REDIS_ADDR", "127.0.0.1:6379"),
+		redisPassword:     env("REDIS_PASSWORD", ""),
 		redisChannel:      env("REDIS_CHANNEL", "chat-messages"),
 		registryBaseURL:   env("REGISTRY_URL", "http://127.0.0.1:9000"),
 		heartbeatInterval: heartbeatInterval,
@@ -252,7 +254,10 @@ func run(parent context.Context, configuration config, logger *log.Logger) (runE
 	}
 	defer store.Close()
 
-	redisClient := redis.NewClient(&redis.Options{Addr: configuration.redisAddress})
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     configuration.redisAddress,
+		Password: configuration.redisPassword,
+	})
 	defer func() {
 		if err := redisClient.Close(); err != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("close Redis client: %w", err))
