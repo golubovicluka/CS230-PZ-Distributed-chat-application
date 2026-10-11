@@ -1,0 +1,5 @@
+apiVersion: v2
+name: platform
+description: Argo CD Applications that make up the local Kubernetes platform
+type: application
+version: 0.1.0

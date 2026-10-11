@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chat-gitops
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/golubovicluka/CS230-PZ-Distributed-chat-application.git
+    targetRevision: main
+    path: deploy/helm/chat
+    helm:
+      valueFiles:
+        - values-gitops.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: chat-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
