@@ -3,7 +3,8 @@
   "extends": [
     "config:recommended",
     ":semanticCommitTypeAll(chore)",
-    ":dependencyDashboard"
+    ":dependencyDashboard",
+    "helpers:pinGitHubActionDigests"
   ],
   "timezone": "Europe/Belgrade",
   "schedule": ["before 6am on monday"],
@@ -39,6 +40,11 @@
       "matchPackageNames": ["postgres"],
       "matchUpdateTypes": ["major"],
       "enabled": false
+    },
+    {
+      "description": "Move the Dagger CLI, engine and workflow version together",
+      "matchPackageNames": ["dagger/dagger", "dagger"],
+      "groupName": "Dagger"
     }
   ],
   "customManagers": [
@@ -49,6 +55,33 @@
       "matchStrings": ["pnpm@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
       "datasourceTemplate": "npm",
       "depNameTemplate": "pnpm"
+    },
+    {
+      "customType": "regex",
+      "description": "Images pinned by tag and digest in the Dagger module",
+      "managerFilePatterns": ["/^ci/.+\\.go$/"],
+      "matchStrings": [
+        "\"(?<depName>[^\":@\\s]+):(?<currentValue>[^\"@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})\"\\s*// renovate: image"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Tool versions annotated with a renovate comment in the Dagger module",
+      "managerFilePatterns": ["/^ci/.+\\.go$/"],
+      "matchStrings": ["\"(?<currentValue>[^\"]+)\"\\s*// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "Dagger engine version in dagger.json and the workflows",
+      "managerFilePatterns": ["/^dagger\\.json$/", "/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": [
+        "\"engineVersion\": \"v(?<currentValue>[^\"]+)\"",
+        "dagger/dagger-for-github@[a-f0-9]{40} # \\S+\\s+with:\\s+version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "dagger/dagger",
+      "extractVersionTemplate": "^v(?<version>.+)$"
     }
   ]
 }

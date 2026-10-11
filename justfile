@@ -3,6 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 pnpm := "pnpm --dir chat-app"
 local_db := "postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable"
 otel_env := "OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-lgtm:4318 PYROSCOPE_SERVER_ADDRESS=http://otel-lgtm:4040"
+release_identity := "^https://github.com/golubovicluka/CS230-PZ-Distributed-chat-application/\\.github/workflows/release\\.yaml@"
 
 # List recipes
 default:
@@ -33,6 +34,9 @@ doctor:
     @shellcheck --version | sed -n 2p
     @yamllint --version
     @markdownlint-cli2 --help | head -1
+    @dagger version
+    @act --version
+    @cosign version 2>&1 | grep GitVersion
 
 # Build and start the full stack: http://localhost:8080
 up:
@@ -113,6 +117,31 @@ lint-shell:
 secrets:
     gitleaks git --redact --no-banner .
     gitleaks dir --redact --no-banner .
+
+# Run every CI check through Dagger, exactly as GitHub Actions does
+ci:
+    dagger check
+
+# List the CI checks
+ci-list:
+    dagger check -l
+
+# Build all images for amd64 and arm64 and fail on fixable critical CVEs
+images-scan:
+    dagger call images
+
+# Write an SPDX SBOM for one component (chatserver, loadbalancer or web)
+sbom component="chatserver":
+    dagger call sbom --component {{ component }} export --path sbom-{{ component }}.spdx.json
+
+# Run the CI workflow locally with act against the current Docker context
+act:
+    DOCKER_HOST="$(docker context inspect --format '{{{{.Endpoints.docker.Host}}')" act pull_request --workflows .github/workflows/ci.yaml
+
+# Verify the keyless signature and SBOM attestation of a published image
+verify-image image:
+    cosign verify {{ image }} --certificate-identity-regexp "{{ release_identity }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    cosign verify-attestation {{ image }} --type spdxjson --certificate-identity-regexp "{{ release_identity }}" --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # Apply Go formatting
 fmt:

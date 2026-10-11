@@ -8,7 +8,7 @@ This roadmap maps the 65-tool DevOps list onto this project: which tools are ado
 | --- | --- | --- |
 | 0 | App readiness: Postgres, LB eviction, drain, origins, reconnect | Done |
 | 1 | Containers, Compose, Colima, just, mise, linters, gitleaks, Renovate, OpenTelemetry, Pyroscope | Done |
-| 2 | CI with Dagger, act, SBOM, scanning, signing | Next |
+| 2 | CI with Dagger, act, SBOM, scanning, signing | Done |
 | 3 to 9 | Features, Kubernetes, SRE, delivery, security, IaC, stretch | Planned |
 
 Notes from implementing Phases 0 and 1:
@@ -17,6 +17,13 @@ Notes from implementing Phases 0 and 1:
 - pnpm is 12.x; native build scripts (`@swc/core`, `@tailwindcss/oxide`, `esbuild`) are approved explicitly in `chat-app/pnpm-workspace.yaml`.
 - Frontend major upgrades (Vite 8, TypeScript 7, ESLint 10) were intentionally left for Renovate to propose separately.
 - Compose uses an nginx gateway as the single public origin, mirroring the role Envoy Gateway takes in Phase 4.
+
+Notes from implementing Phase 2:
+
+- **Pinning:** in March 2026 Trivy was compromised (CVE-2026-33634): a malicious v0.69.4 was published and most `aquasecurity/trivy-action` tags were force-pushed to credential-stealing code. Every action is therefore pinned to a commit SHA and every tool image to a digest. `trivy-action` is not used; Trivy runs as a digest-pinned image inside Dagger.
+- **SBOM formats:** the CVE gate uses a Syft-native SBOM with Go function symbols, because SPDX does not carry them. The published and attested SBOM is SPDX.
+- **Web image user:** it now declares `USER 101:101` explicitly, which Trivy's DS-0002 requires and which Kubernetes `runAsNonRoot` needs in Phase 4.
+- **actionlint:** added as a check. It is not on the original list, but it catches workflow mistakes that yamllint cannot.
 
 ## Context
 

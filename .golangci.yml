@@ -17,6 +17,8 @@ linters:
   exclusions:
     presets:
       - std-error-handling
+    paths:
+      - ^ci/
     rules:
       - path: _test\.go
         linters:
@@ -27,6 +29,12 @@ formatters:
   enable:
     - gofmt
     - goimports
+  # The Dagger module in ci/ depends on generated code that only exists inside
+  # the Dagger engine, so goimports would invent imports for it. It is checked
+  # with plain gofmt by the go-lint check instead.
+  exclusions:
+    paths:
+      - ^ci/
   settings:
     goimports:
       local-prefixes:

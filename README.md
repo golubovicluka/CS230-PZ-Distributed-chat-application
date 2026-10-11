@@ -97,13 +97,34 @@ The load balancer takes `-address` (`:9000`), `-server-ttl` (`30s`), `-allowed-o
 
 | Command | What it does |
 | --- | --- |
+| `just ci` | Every CI check through Dagger, exactly as GitHub Actions runs it |
 | `just test` | Go unit tests with the race detector |
 | `just test-integration` | All Go tests against the Compose Postgres and Redis |
 | `just lint` | golangci-lint, gofmt/goimports, ESLint, tsc, yamllint, markdownlint, shellcheck, gitleaks |
-| `just images-all` | Multi-arch (amd64 and arm64) image build with `docker buildx bake` |
+| `just images-scan` | Builds all images for amd64 and arm64, then gates on fixable critical CVEs |
+| `just act` | Runs the GitHub `ci` workflow locally with act |
+| `just verify-image <ref>` | Checks the cosign signature and SBOM attestation of a published image |
 | `just hooks` | Enables the pre-commit hook (gitleaks on staged changes, Go formatting) |
 
 Dependency updates are proposed by Renovate (`renovate.json`) once the Renovate GitHub App is enabled for the repository.
+
+## CI and supply chain
+
+The pipeline is a Dagger module in `ci/` (Go SDK). GitHub Actions only installs Dagger and calls it, so `just ci` on a laptop runs the same containers as CI.
+
+| Check | What it enforces |
+| --- | --- |
+| `go-lint` | golangci-lint, Go formatting, `go mod tidy` |
+| `go-test` | All Go tests with `-race` against PostgreSQL and Redis service containers |
+| `web` | ESLint, `tsc -b` and the production build |
+| `yaml`, `markdown`, `shell`, `workflows` | yamllint, markdownlint, shellcheck and actionlint |
+| `secrets` | gitleaks over the working tree and git history |
+| `config` | Trivy misconfiguration scan of Dockerfiles, HIGH and CRITICAL fail |
+| `images` | Builds all three images for amd64 and arm64; Grype fails on fixable critical CVEs |
+
+- **SBOM precision:** the CVE gate uses a Syft SBOM that captures Go function symbols. Grype then flags a Go CVE only when the vulnerable function is actually in the binary.
+- **Releases:** on `main` and `v*` tags, `release.yaml` pushes multi-arch images to `ghcr.io/golubovicluka/chat-*`. It signs them keyless with cosign through GitHub OIDC and attaches an SPDX SBOM attestation.
+- **Pinning:** every GitHub Action is pinned to a commit SHA and every tool image to a digest; Renovate updates both. This is a direct response to the March 2026 Trivy compromise (CVE-2026-33634), when attackers force-pushed `trivy-action` version tags to credential-stealing code.
 
 ## Backend design
 

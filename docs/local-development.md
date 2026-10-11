@@ -48,8 +48,15 @@ Install Docker Engine with the `docker-buildx-plugin` and `docker-compose-plugin
 | Backend on the host, deps in containers | `just deps`, `just dev-lb`, `just dev-server 8080`, `just dev-server 8081`, `just dev-web` |
 | Tests | `just test`, `just test-integration` |
 | Everything CI will lint | `just lint` |
+| The CI pipeline itself | `just ci` (Dagger), `just ci-list`, `just act` |
 
 The Vite dev server proxies `/lb` to `LB_URL` (default `http://127.0.0.1:9000`) and `/api` to `CHAT_API_URL` (default `http://127.0.0.1:8080`). The SPA reads its runtime settings from `/config.js`. In containers the `web` image renders that file from the `CHAT_DISCOVERY`, `CHAT_LB_URL`, `CHAT_HISTORY_URL` and `CHAT_WS_PATH` environment variables.
+
+## CI locally
+
+`just ci` runs `dagger check`, which starts the Dagger engine as a container on the active Docker context (Colima on macOS) and runs every check in parallel. The first run pulls the tool images; later runs reuse Dagger's cache.
+
+`just act` runs `.github/workflows/ci.yaml` with act. `.actrc` maps `ubuntu-24.04` to the `catthehacker/ubuntu:act-24.04` image and mounts the VM's Docker socket into the job. The Dagger step inside the job can then start its engine next to it. The release workflow is skipped under act.
 
 ## Troubleshooting
 

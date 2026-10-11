@@ -18,3 +18,4 @@ ENV NGINX_ENVSUBST_FILTER=CHAT_ \
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
+USER 101:101
