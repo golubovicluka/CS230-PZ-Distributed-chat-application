@@ -37,6 +37,25 @@ open http://localhost:8080
 
 Linux needs only Docker Engine with the buildx and compose plugins plus `mise install`. Details, Colima sizing and troubleshooting are in [docs/local-development.md](docs/local-development.md).
 
+## Kubernetes
+
+```bash
+just cluster      # kind + zot + Argo CD (OpenTofu), platform sync, OpenBao configuration
+just trust-ca     # once per machine
+just dev          # Tilt builds into zot and deploys the Helm chart
+open https://chat.localhost
+```
+
+The same app runs on a three-node kind cluster. The pieces:
+
+- Envoy Gateway balances WebSockets across chatserver pods with `LeastRequest`, replacing the Go load balancer.
+- cert-manager issues TLS from a name-constrained local CA.
+- CloudNativePG runs a two-instance PostgreSQL.
+- The Redis password flows from OpenBao through External Secrets.
+- Argo CD owns the platform, and Headlamp and k9s give a view into the cluster.
+
+Details are in [docs/kubernetes.md](docs/kubernetes.md).
+
 ## Observability
 
 ```bash
@@ -83,6 +102,7 @@ Every chat server flag can also be set with an environment variable; flags win.
 | `-advertise` | `CHAT_ADVERTISE` | `ws://127.0.0.1:8080` | `ws(s)://` URL or same-origin path such as `/cs/1` sent to clients by the LB |
 | `-db` | `DATABASE_URL` | `postgres://chat:chat@127.0.0.1:5432/chat?sslmode=disable` | PostgreSQL URL; migrations run at startup |
 | `-redis` | `REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
+| none | `REDIS_PASSWORD` | empty | Redis password; environment only, so it never shows up in process arguments |
 | `-redis-channel` | `REDIS_CHANNEL` | `chat-messages` | Pub/sub channel |
 | `-registry` | `REGISTRY_URL` | `http://127.0.0.1:9000` | Load balancer URL; empty disables registration |
 | `-heartbeat` | `CHAT_HEARTBEAT_INTERVAL` | `10s` | Load report interval |
@@ -121,6 +141,14 @@ The pipeline is a Dagger module in `ci/` (Go SDK). GitHub Actions only installs 
 | `secrets` | gitleaks over the working tree and git history |
 | `config` | Trivy misconfiguration scan of Dockerfiles, HIGH and CRITICAL fail |
 | `images` | Builds all three images for amd64 and arm64; Grype fails on fixable critical CVEs |
+| `manifests` | `helm lint` and kubeconform against the Kubernetes 1.36 and CRD schemas for the chart, the platform and the Argo CD apps |
+| `tofu` | `tofu fmt` and `tofu validate` for `infra/local` and `infra/secrets` |
+
+`k8s-e2e.yaml` covers the cluster end to end on every pull request that touches the app, chart, platform or infrastructure:
+
+1. It builds the whole kind platform for the PR's revision.
+2. It deploys with `tilt ci`.
+3. It runs the smoke test and two Go WebSocket tests: one for cross-connection fan-out and history, one for a graceful 1001 drain during a rolling restart.
 
 - **SBOM precision:** the CVE gate uses a Syft SBOM that captures Go function symbols. Grype then flags a Go CVE only when the vulnerable function is actually in the binary.
 - **Releases:** on `main` and `v*` tags, `release.yaml` pushes multi-arch images to `ghcr.io/golubovicluka/chat-*`. It signs them keyless with cosign through GitHub OIDC and attaches an SPDX SBOM attestation.

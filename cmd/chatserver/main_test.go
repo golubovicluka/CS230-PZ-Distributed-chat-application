@@ -71,6 +71,21 @@ func TestParseConfigPrecedence(t *testing.T) {
 	}
 }
 
+func TestParseConfigRedisPasswordFromEnvironmentOnly(t *testing.T) {
+	t.Parallel()
+
+	configuration, err := parseConfig(nil, lookupFrom(map[string]string{"REDIS_PASSWORD": "s3cret"}), io.Discard)
+	if err != nil {
+		t.Fatalf("parseConfig() error = %v", err)
+	}
+	if configuration.redisPassword != "s3cret" {
+		t.Errorf("redis password = %q, want value from environment", configuration.redisPassword)
+	}
+	if _, err := parseConfig([]string{"-redis-password", "s3cret"}, lookupFrom(nil), io.Discard); err == nil {
+		t.Error("parseConfig() accepted -redis-password, want the secret to stay out of process arguments")
+	}
+}
+
 func TestParseConfigHelp(t *testing.T) {
 	t.Parallel()
 

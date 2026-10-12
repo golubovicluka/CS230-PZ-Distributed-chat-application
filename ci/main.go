@@ -15,22 +15,29 @@ import (
 // Tool and base images are pinned by tag and digest. Renovate updates both
 // through the "renovate: image" marker.
 const (
-	golangImage       = "golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c"                        // renovate: image
-	golangciImage     = "golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f"       // renovate: image
-	nodeImage         = "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"                       // renovate: image
-	pythonImage       = "python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a"                   // renovate: image
-	markdownlintImage = "davidanson/markdownlint-cli2:v0.23.3@sha256:d5f3f3f04b2e285dcbcdcd13b4454d119e273e3c393a9dabd163dba4abad526d" // renovate: image
-	shellcheckImage   = "koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002"   // renovate: image
-	actionlintImage   = "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"              // renovate: image
-	gitleaksImage     = "zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"         // renovate: image
-	trivyImage        = "aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"                 // renovate: image
-	syftImage         = "anchore/syft:v1.54.1@sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa"                 // renovate: image
-	grypeImage        = "anchore/grype:v0.120.1@sha256:e4a44ef45d285b829ce6efe2642980329661bd2d18eab5fc539138d4adaebbbe"               // renovate: image
-	postgresImage     = "postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"                   // renovate: image
-	redisImage        = "redis:8.8-alpine@sha256:0b2b77d3ea5078274795e3177cdbdada8b96316684a38911d528534ed679b5ec"                     // renovate: image
+	golangImage       = "golang:1.27.2@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c"                            // renovate: image
+	golangciImage     = "golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f"           // renovate: image
+	nodeImage         = "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1"                           // renovate: image
+	pythonImage       = "python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a"                       // renovate: image
+	markdownlintImage = "davidanson/markdownlint-cli2:v0.23.3@sha256:d5f3f3f04b2e285dcbcdcd13b4454d119e273e3c393a9dabd163dba4abad526d"     // renovate: image
+	shellcheckImage   = "koalaman/shellcheck-alpine:v0.11.0@sha256:9955be09ea7f0dbf7ae942ac1f2094355bb30d96fffba0ec09f5432207544002"       // renovate: image
+	actionlintImage   = "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"                  // renovate: image
+	gitleaksImage     = "zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"             // renovate: image
+	trivyImage        = "aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa"                     // renovate: image
+	syftImage         = "anchore/syft:v1.54.1@sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa"                     // renovate: image
+	grypeImage        = "anchore/grype:v0.120.1@sha256:e4a44ef45d285b829ce6efe2642980329661bd2d18eab5fc539138d4adaebbbe"                   // renovate: image
+	postgresImage     = "postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"                       // renovate: image
+	redisImage        = "redis:8.8-alpine@sha256:0b2b77d3ea5078274795e3177cdbdada8b96316684a38911d528534ed679b5ec"                         // renovate: image
+	helmImage         = "alpine/helm:4.3.0@sha256:a6cf54599ccb99d90cf0712b30f03fdb3cab062e6b94e0418cc4db7e8a1464b2"                        // renovate: image
+	kubeconformImage  = "ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e"         // renovate: image
+	tofuImage         = "ghcr.io/opentofu/opentofu:1.13.1-minimal@sha256:dfbc3f0a8bed0adfa2cf49ff418f158afe24080eea6d6e748db8799fc4553db6" // renovate: image
+	alpineImage       = "alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0"                              // renovate: image
 
 	pnpmVersion     = "12.11.2" // renovate: datasource=npm depName=pnpm
 	yamllintVersion = "1.38.0"  // renovate: datasource=pypi depName=yamllint
+
+	kubernetesVersion  = "1.36.4"
+	crdCatalogRevision = "63669a570e231d4f1f8396d229a1de512bcf0a34" // renovate: git-refs https://github.com/datreeio/CRDs-catalog main
 )
 
 var (
@@ -46,7 +53,7 @@ type Chat struct {
 func New(
 	// Repository root
 	// +defaultPath="/"
-	// +ignore=["chat-app/node_modules", "chat-app/dist", "**/.DS_Store"]
+	// +ignore=["chat-app/node_modules", "chat-app/dist", "**/.DS_Store", "**/.terraform", "**/*.tfstate", "**/*.tfstate.*"]
 	source *dagger.Directory,
 ) *Chat {
 	return &Chat{Source: source}
@@ -60,6 +67,7 @@ func (m *Chat) GoLint(ctx context.Context) error {
 		WithExec([]string{"golangci-lint", "run", "./..."}).
 		WithExec([]string{"golangci-lint", "fmt", "--diff", "./..."}).
 		WithExec([]string{"go", "mod", "tidy", "-diff"}).
+		WithExec([]string{"golangci-lint", "run", "--build-tags", "e2e", "./test/..."}).
 		WithDirectory("/ci", m.Source.Directory("ci"), dagger.ContainerWithDirectoryOpts{Include: []string{"**/*.go"}}).
 		WithExec([]string{"sh", "-c", `unformatted="$(gofmt -l /ci)"; if [ -n "$unformatted" ]; then gofmt -d /ci; exit 1; fi`}).
 		Sync(ctx)
@@ -186,6 +194,61 @@ func (m *Chat) Config(ctx context.Context) error {
 			"--severity", "HIGH,CRITICAL",
 			".",
 		}).
+		Sync(ctx)
+	return err
+}
+
+// Lint the Helm charts and validate every rendered and plain Kubernetes
+// manifest against the Kubernetes and CRD schemas
+// +check
+func (m *Chat) Manifests(ctx context.Context) error {
+	crdSchemas := "https://raw.githubusercontent.com/datreeio/CRDs-catalog/" + crdCatalogRevision +
+		"/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+	_, err := dag.Container().
+		From(helmImage).
+		WithFile("/usr/local/bin/kubeconform", dag.Container().From(kubeconformImage).File("/kubeconform")).
+		With(m.withSource).
+		WithEnvVariable("KUBERNETES_VERSION", kubernetesVersion).
+		WithEnvVariable("CRD_SCHEMAS", crdSchemas).
+		WithExec([]string{"sh", "-c", `
+set -eu
+mkdir -p /rendered
+for values in values.yaml values-dev.yaml values-gitops.yaml; do
+  helm lint --strict deploy/helm/chat -f "deploy/helm/chat/$values"
+  helm template chat deploy/helm/chat --namespace chat -f "deploy/helm/chat/$values" > "/rendered/chat-$values"
+done
+helm lint --strict deploy/argocd/platform
+helm template platform deploy/argocd/platform --namespace argocd > /rendered/platform.yaml
+kubeconform -strict -summary -skip ClusterSecretStore \
+  -kubernetes-version "$KUBERNETES_VERSION" \
+  -schema-location default -schema-location "$CRD_SCHEMAS" \
+  /rendered deploy/platform deploy/argocd/apps`}).
+		Sync(ctx)
+	return err
+}
+
+// Check formatting and validate both OpenTofu root modules
+// +check
+func (m *Chat) Tofu(ctx context.Context) error {
+	_, err := dag.Container().
+		From(alpineImage).
+		WithFile("/usr/local/bin/tofu", dag.Container().From(tofuImage).File("/usr/local/bin/tofu")).
+		WithMountedCache("/plugin-cache", dag.CacheVolume("chat-tofu-plugins")).
+		WithEnvVariable("TF_PLUGIN_CACHE_DIR", "/plugin-cache").
+		WithEnvVariable("TF_IN_AUTOMATION", "1").
+		WithDirectory("/src", m.Source, dagger.ContainerWithDirectoryOpts{Include: []string{"infra/"}}).
+		WithWorkdir("/src").
+		WithExec([]string{"sh", "-c", `
+set -eu
+tofu fmt -check -diff -recursive infra
+for dir in infra/local infra/secrets; do
+  lockfile=""
+  if [ -f "$dir/.terraform.lock.hcl" ]; then
+    lockfile="-lockfile=readonly"
+  fi
+  tofu -chdir="$dir" init -backend=false -input=false $lockfile
+  tofu -chdir="$dir" validate
+done`}).
 		Sync(ctx)
 	return err
 }
@@ -344,7 +407,7 @@ func (m *Chat) goContainer(image string) *dagger.Container {
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("chat-go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("chat-go-build")).
 		WithDirectory("/src", m.Source, dagger.ContainerWithDirectoryOpts{
-			Include: []string{"go.mod", "go.sum", "cmd/", "internal/", ".golangci.yml"},
+			Include: []string{"go.mod", "go.sum", "cmd/", "internal/", "test/", ".golangci.yml"},
 		}).
 		WithWorkdir("/src")
 }

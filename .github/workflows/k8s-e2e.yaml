@@ -1,0 +1,102 @@
+name: k8s-e2e
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/k8s-e2e.yaml"
+      - "Tiltfile"
+      - "build/**"
+      - "chat-app/**"
+      - "cmd/**"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+      - "infra/**"
+      - "internal/**"
+      - "justfile"
+      - "mise.toml"
+      - "scripts/**"
+      - "test/e2e/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/k8s-e2e.yaml"
+      - "Tiltfile"
+      - "build/**"
+      - "chat-app/**"
+      - "cmd/**"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+      - "infra/**"
+      - "internal/**"
+      - "justfile"
+      - "mise.toml"
+      - "scripts/**"
+      - "test/e2e/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+      REPOSITORY: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}.git', github.server_url, github.repository) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned tools
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          install_args: go just opentofu kind kubectl helm tilt
+
+      - name: Generate provider lock files
+        if: hashFiles('infra/local/.terraform.lock.hcl', 'infra/secrets/.terraform.lock.hcl') == ''
+        run: |
+          just tofu-lock
+          for lockfile in infra/*/.terraform.lock.hcl; do
+            echo "::group::${lockfile}"
+            cat "${lockfile}"
+            echo "::endgroup::"
+          done
+
+      - name: Create the cluster and sync the platform
+        run: just cluster "${REVISION}" "${REPOSITORY}"
+
+      - name: Build and deploy the chat with Tilt
+        run: just dev-ci
+
+      - name: Smoke test through Envoy
+        run: just k8s-smoke
+
+      - name: Chat across connections
+        run: just e2e
+
+      - name: Graceful drain on a rolling restart
+        run: just e2e-drain
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl --context kind-chat -n argocd get applications || true
+          for app in $(kubectl --context kind-chat -n argocd get applications -o name); do
+            echo "== ${app} resources that are not Synced or not Healthy"
+            kubectl --context kind-chat -n argocd get "${app}" \
+              -o jsonpath='{range .status.resources[*]}{.kind} {.namespace}/{.name}: {.status} {.health.status} {.health.message}{"\n"}{end}' \
+              | grep -Ev ': Synced( Healthy)?[[:space:]]*$' || true
+          done
+          kubectl --context kind-chat get pods -A -o wide || true
+          kubectl --context kind-chat get events -A --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl --context kind-chat get gateway,httproute,certificate,externalsecret,clustersecretstore -A || true
+          kubectl --context kind-chat -n chat logs -l app.kubernetes.io/part-of=chat --all-containers --prefix --tail=200 || true
+          kubectl --context kind-chat -n envoy-gateway-system logs deployment/envoy-gateway --tail=100 || true

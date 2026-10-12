@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+    app.kubernetes.io/name: redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "chat.selector" "redis" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chat.selector" "redis" | nindent 8 }}
+    spec:
+      serviceAccountName: chat
+      automountServiceAccountToken: false
+      securityContext:
+        {{- include "chat.podSecurityContext" . | nindent 8 }}
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: {{ include "chat.image" .Values.redis.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: chat-redis
+                  key: password
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            tcpSocket:
+              port: redis
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            {{- include "chat.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 999
+            runAsGroup: 999
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "chat.selector" "redis" | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis

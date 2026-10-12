@@ -9,7 +9,8 @@ This roadmap maps the 65-tool DevOps list onto this project: which tools are ado
 | 0 | App readiness: Postgres, LB eviction, drain, origins, reconnect | Done |
 | 1 | Containers, Compose, Colima, just, mise, linters, gitleaks, Renovate, OpenTelemetry, Pyroscope | Done |
 | 2 | CI with Dagger, act, SBOM, scanning, signing | Done |
-| 3 to 9 | Features, Kubernetes, SRE, delivery, security, IaC, stretch | Planned |
+| 4 | Kubernetes on kind: OpenTofu, Argo CD, Envoy Gateway, cert-manager, CloudNativePG, OpenBao, External Secrets, Tilt, zot, Headlamp, k9s | Done |
+| 3, 5 to 9 | Features, SRE, delivery, security, IaC, stretch | Planned |
 
 Notes from implementing Phases 0 and 1:
 
@@ -25,6 +26,18 @@ Notes from implementing Phase 2:
 - **Web image user:** it now declares `USER 101:101` explicitly, which Trivy's DS-0002 requires and which Kubernetes `runAsNonRoot` needs in Phase 4.
 - **actionlint:** added as a check. It is not on the original list, but it catches workflow mistakes that yamllint cannot.
 - **First real CI run:** the Grype gate failed the build on GO-2026-6612 (CVE-2026-78663), a critical HTTP/2 flow-control bypass in `golang.org/x/net` v0.59.0, pulled in indirectly through gRPC and the OTLP exporters. The fix was a bump to v0.61.0. The same run exposed a telemetry test that Dagger's injected `OTEL_EXPORTER_OTLP_*` variables could break; it now isolates its environment.
+
+Notes from implementing Phase 4:
+
+- **Cluster as code:** OpenTofu (`infra/local`) creates the kind cluster, the zot registry container and Argo CD, instead of a `deploy/kind/cluster.yaml` plus shell. `just cluster-down` is a `tofu destroy`.
+- **Ports:** only HTTPS is exposed, on `127.0.0.1:443` through NodePort 30443. The Envoy service uses `externalTrafficPolicy: Cluster`; the Envoy Gateway default, `Local`, would drop traffic arriving at the control-plane node, where no Envoy pod runs.
+- **Local CA:** `scripts/local-ca.sh` creates one CA per machine, name-constrained to `chat.localhost` and loopback IPs. Trusting it once survives cluster re-creation, and its key cannot mint certificates for other domains. mkcert was rejected because its root is unconstrained.
+- **OpenBao:** it is configured by a second OpenTofu root (`infra/secrets`), not by a seed Job. The Redis password then lives in Tofu state, and re-applying after a dev-mode restart restores the same value, so running pods keep working.
+- **Tilt:** `live_update` is dropped. Distroless images have no shell to restart the process, and a cached Go image rebuild takes about 20 seconds.
+- **Moved to Phase 3:** the CoreDNS rewrite and the Keycloak, OpenFGA, Mailpit, fake-gcs, Pub/Sub emulator and ClamAV platform pieces. They have no consumer until the features exist.
+- **kubeconform:** the datree catalog's `ClusterSecretStore` v1 schema does not compile as draft-04 (a CRD property named `additionalProperties` is a boolean), so that one kind is skipped. The first kubeconform run caught a real duplicate-label bug in the chart.
+- **Argo CD diff:** server-side diff is on for the whole controller. Without it, fields that the API server defaults on Gateway API resources, such as `matches` and the `group` and `kind` of references, show up as permanent drift. The first kind run in CI stalled exactly there.
+- **End to end in CI:** `k8s-e2e.yaml` builds the platform on kind for the PR's revision, deploys with `tilt ci`, and runs the smoke test and two Go WebSocket tests. One test checks fan-out and history. The other checks that a rolling restart closes sockets with 1001, not 1006. The drain test fails on a hard kill.
 
 ## Context
 
@@ -72,10 +85,10 @@ Phase numbers refer to the phases below.
 
 | # | Pick | Verdict | Job in this project |
 | --- | --- | --- | --- |
-| 1 | kind | Add P4 | 3-node cluster, `extraPortMappings` 80/443, zot as containerd mirror |
+| 1 | kind | Add P4 | 3-node cluster created by OpenTofu, `extraPortMappings` 443, zot as containerd mirror |
 | 2 | Engine, Buildx, Compose | Add P1 | distroless multi-arch images via `docker buildx bake`, `compose.yaml` with profiles |
 | 3 | Colima | Add P1 | Docker Engine VM on macOS; Podman skipped |
-| 4 | Tilt | Add P4 | inner loop on kind: build to zot, `live_update` Go binaries and SPA assets |
+| 4 | Tilt | Add P4 | inner loop on kind: build to zot, deploy the chart, gate on database and secret readiness |
 | 5 | Dagger (Go SDK) | Add P2 | the CI pipeline itself; GitHub Actions, Forgejo and `just` only call it |
 | 6 | just | Add P1 | single entrypoint for every workflow |
 | 7 | act | Add P2 | run `.github/workflows/ci.yaml` locally against the Colima socket |
@@ -92,7 +105,7 @@ Phase numbers refer to the phases below.
 | 18 | External Secrets | Add P4 | sync DB, Keycloak client and OpenFGA secrets from OpenBao (Vault-compatible provider) |
 | 19 | OpenBao | Add P4 | secrets backend, Kubernetes auth for ESO |
 | 20 | Coraza | Add P7 | OWASP CRS on the gateway via EnvoyExtensionPolicy; inspects HTTP and the upgrade request, not WS frames |
-| 21 | CoreDNS | Add P4 | rewrite `*.chat.localhost` to the Envoy service so pods see the same OIDC issuer URL as browsers; PowerDNS skipped |
+| 21 | CoreDNS | Add P3 | rewrite `*.chat.localhost` to the Envoy service so pods see the same OIDC issuer URL as browsers; PowerDNS skipped |
 | 22 | nginx | Add P1 | serves the built SPA, single origin + path routing in Compose; Varnish skipped |
 | 23 | Postgres, CloudNativePG | Add P0, P4 | shared store for messages, rooms and attachments; CNPG 2 instances + barman backups |
 | 24 | MongoDB / FerretDB | Skip | no data that Postgres doesn't already hold well; a second database would be hard to justify at the defense |
@@ -148,13 +161,13 @@ internal/{chat,postgres,registry,loadbalancer,httpapi,telemetry,authn,authz,atta
 proto/chat/v1/*.proto  buf.yaml  buf.gen.yaml  gen/go/
 chat-app/ (pnpm, Dockerfile, nginx/, src/gen/)
 build/Dockerfile  docker-bake.hcl  compose.yaml
-deploy/kind/  deploy/argocd/  deploy/platform/<component>/  deploy/helm/chat/
+deploy/argocd/{platform,apps}/  deploy/platform/{config,secret-store}/  deploy/helm/chat/
 deploy/policies/  deploy/chaos/
-infra/local/  infra/gcp/  .tflint.hcl  infracost.yml
+infra/local/  infra/secrets/  infra/gcp/  .tflint.hcl  infracost.yml
 ci/ (Dagger module)  .github/workflows/{ci,release}.yaml
 auth/keycloak/realm-chat.json  authz/{model.fga,store.fga.yaml}
 observability/{dashboards,rules}/
-tests/e2e/ (Playwright)  tests/load/ (k6)
+test/e2e/ (Go, against the cluster)  chat-app/e2e/ (Playwright)  tests/load/ (k6)
 justfile  mise.toml  Tiltfile  renovate.json
 .golangci.yml  .yamllint.yaml  .markdownlint-cli2.yaml  .gitleaks.toml
 ```
@@ -235,30 +248,38 @@ Each phase leaves the project runnable and lands as its own pull request.
   5. A status event goes out on Redis to clients
   6. Download requires an FGA check and `status=clean`
 - Compose profiles: `auth`, `files`, `chaos` (Toxiproxy in front of Redis/Postgres), `uptime` (Uptime Kuma), `mail`.
-- Playwright `tests/e2e`:
+- Playwright `chat-app/e2e`:
   - alice and bob on different servers exchange messages
   - a non-member is denied access to a room
   - an EICAR upload is marked infected
+- Kubernetes: Keycloak, OpenFGA, Mailpit, fake-gcs, the Pub/Sub emulator and ClamAV join the Argo CD platform. The scanner joins the chart, with ExternalSecrets for their credentials. A CoreDNS rewrite of `*.chat.localhost` to the Envoy service lets pods use the same OIDC issuer URL as browsers.
 - Verify: `just up --full && just e2e`, `fga model test`, `buf lint`, `buf breaking --against .git#branch=main`.
 
 ### Phase 4: Kubernetes platform on kind
 
-- `deploy/kind/cluster.yaml`: 1 control plane + 2 workers, ports 80/443 mapped to Envoy NodePorts, containerd mirror pointing at a zot container on the kind network. Created by `just cluster`.
-- `infra/local` (OpenTofu): `helm_release` for Argo CD, root Application, and OpenBao setup (kv mount, policies, Kubernetes auth, seeded secrets) via the Vault provider.
-- `deploy/argocd/root.yaml`: app-of-apps with profile toggles. `deploy/platform/*` contains:
-  - Gateway API CRDs (installed once, standard channel), Envoy Gateway
-  - cert-manager + CA ClusterIssuer, CoreDNS patch
-  - CNPG operator, OpenBao (dev mode), ESO + ClusterSecretStore
-  - Keycloak, OpenFGA, Mailpit, fake-gcs, Pub/Sub emulator, ClamAV
-  - Redis (official image manifest), Headlamp
+- `infra/local` (OpenTofu):
+  - kind: 1 control plane and 2 workers, node image pinned by digest, `127.0.0.1:443` mapped to Envoy's NodePort 30443.
+  - containerd `hosts.toml` files for the zot registry and a Docker Hub mirror.
+  - zot as a container on the kind network.
+  - Argo CD via `helm_release`, the root Application, and the local CA secret for cert-manager.
+- `deploy/argocd/platform`: an app-of-apps Helm chart with sync waves.
+  - Wave 0: cert-manager, Envoy Gateway, CloudNativePG, OpenBao (dev mode), External Secrets.
+  - Wave 1: `deploy/platform/config`, with the CA ClusterIssuer, the EnvoyProxy, GatewayClass, Gateway and wildcard certificate, and routes for Argo CD, Headlamp and OpenBao.
+  - Wave 2: Headlamp.
+  - Wave 3: the OpenBao ClusterSecretStore.
+- `infra/secrets` (OpenTofu, vault provider): kv mount, Redis password, policy and Kubernetes auth role for External Secrets.
 - `deploy/helm/chat` chart:
-  - chatserver, web and scanner workloads
-  - CNPG `Cluster` (2 instances), ExternalSecrets
-  - Gateway + HTTPRoutes for `chat.localhost` and `auth.chat.localhost`, BackendTrafficPolicy `LeastRequest`
-  - PDB, topology spread, probes, preStop drain
-- `Tiltfile`: `docker_build` to zot, deploy the Helm chart, `live_update` with a cross-compiled Go binary sync.
-- `just trust-ca` exports the CA and adds it to the macOS keychain.
-- Verify: `just cluster && just platform && just dev`, then <https://chat.localhost> loads and logs in. Delete a chatserver pod and the client reconnects. `kubectl cnpg status` is healthy and the ExternalSecrets are Ready.
+  - chatserver and web Deployments with PDBs, topology spread, probes, non-root read-only pods.
+  - Redis with a password from an ExternalSecret.
+  - CNPG `Cluster` with 2 instances.
+  - HTTPRoute for `chat.localhost` (`/ws`, `/api`, `/`) and a `LeastRequest` BackendTrafficPolicy.
+- `Tiltfile`: `docker_build` to zot, deploy the chart, wait for the database and secret before chatserver.
+- `deploy/argocd/apps/chat.yaml`: optional GitOps mode, deploying the chart from `main` with the GHCR images into `chat-gitops`.
+- Verify:
+  - `just cluster && just trust-ca && just dev`, then <https://chat.localhost> works in two browsers.
+  - Deleting a chatserver pod makes the client reconnect.
+  - `kubectl cnpg status chat-db -n chat` is healthy and the ExternalSecret is Ready.
+  - CI repeats this on every relevant PR in `k8s-e2e.yaml`.
 
 ### Phase 5: Observability and SRE in Kubernetes
 
@@ -342,7 +363,7 @@ core + features + obs fits, plus one more profile at a time.
 - Gateway API CRD versions: Envoy Gateway 1.8 pairs with Gateway API v1.5.1. Pick one version compatible with Istio 1.31 and disable chart-managed CRDs.
 - Floci S3 compatibility with barman-cloud and Velero/Kopia multipart uploads. Fallback is MiniStack.
 - k6 `k6/websockets` is still labeled experimental in the docs.
-- OpenBao dev mode is in-memory, so `just secrets` re-seeds it after a restart.
+- OpenBao dev mode is in-memory, so `just cluster-secrets` re-applies its configuration after a restart.
 - Tool versions checked today: Tilt v0.37.8, Dagger v0.21.10, Envoy Gateway v1.8, Istio 1.31, otel-lgtm v0.29.x, Pyrra v0.10.x. Everything else is pinned in `mise.toml` at implementation time.
 
 ## Verification
@@ -356,6 +377,6 @@ core + features + obs fits, plus one more profile at a time.
   - `docker compose config`, plus `dagger call` if a Docker daemon is available
 - On your Mac:
   - `just doctor`, then `just up && just e2e`
-  - `just cluster && just platform && just dev`
+  - `just cluster && just trust-ca && just dev`
   - `just load`, `just chaos pod-kill`, `just restore-drill`
   - check Grafana and ntfy

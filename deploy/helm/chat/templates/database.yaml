@@ -1,0 +1,16 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: chat-db
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.instances }}
+  bootstrap:
+    initdb:
+      database: chat
+      owner: chat
+  storage:
+    size: {{ .Values.database.storage }}
+  resources:
+    {{- toYaml .Values.database.resources | nindent 4 }}
