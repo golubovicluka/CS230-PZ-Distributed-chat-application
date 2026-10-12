@@ -47,6 +47,8 @@ doctor:
     @tilt version
     @k9s version --short | head -1
     @kubeconform -v
+    @k6 version
+    @jq --version
 
 # Build and start the full stack: http://localhost:8080
 up:
@@ -266,6 +268,18 @@ e2e-drain base="https://chat.localhost":
     E2E_BASE_URL={{ base }} E2E_CA_FILE="$(scripts/local-ca.sh)/ca.crt" \
       E2E_RESTART_CMD="{{ kube }} -n chat rollout restart deployment/chatserver" \
       go test -tags e2e -count=1 -v -run TestGracefulDrain ./test/e2e/
+
+# Drive WebSocket load through Envoy with k6 and fail unless KEDA scales chatserver out
+load vus="150":
+    VUS={{ vus }} scripts/load.sh "$(scripts/local-ca.sh)/ca.crt"
+
+# Check that metrics, traces, logs, profiles, the dashboard, SLO rules and alert notifications arrived
+obs-check:
+    scripts/obs-check.sh
+
+# Print the Grafana admin password (user admin)
+grafana-password:
+    @{{ kube }} -n observability get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
 
 # Print the initial Argo CD admin password
 argocd-password:

@@ -611,7 +611,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "k6 load test: fan-out latency seen by clients",
-      "description": "Only populated while `just load` runs; k6 writes to Prometheus over remote write.",
+      "description": "Only populated while `just load` runs; k6 writes to Prometheus over remote write, in seconds.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -624,7 +624,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
+          "unit": "s",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10
