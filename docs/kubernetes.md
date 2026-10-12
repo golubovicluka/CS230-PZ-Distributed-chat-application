@@ -29,7 +29,7 @@ just dev          # Tilt: builds the images into zot and deploys the chart
 open https://chat.localhost
 ```
 
-`just cluster` takes 5 to 10 minutes the first time. It uses about 4 to 5 GB of the Colima VM, so the Compose stack can keep running next to it.
+`just cluster` takes 5 to 10 minutes the first time. With the observability stack it uses about 7 GB of the 14 GB Colima VM.
 
 | URL | What | Login |
 | --- | --- | --- |
@@ -68,6 +68,52 @@ On a rolling update or a pod deletion:
 
 `just e2e-drain` proves this against the cluster.
 
+## Observability and SRE
+
+Argo CD also installs a full observability stack in the `observability` namespace:
+
+- kube-prometheus-stack (Prometheus, Alertmanager, Grafana);
+- Loki, Tempo and Pyroscope;
+- an OpenTelemetry Collector;
+- the blackbox exporter, Pyrra and KEDA;
+- ntfy and Mailpit.
+
+| URL | What |
+| --- | --- |
+| <https://grafana.chat.localhost> | Grafana; user `admin`, password from `just grafana-password`. Open the "Chat" dashboard. |
+| <https://prometheus.chat.localhost> | Prometheus |
+| <https://alertmanager.chat.localhost> | Alertmanager |
+| <https://pyrra.chat.localhost> | SLOs and error budgets |
+| <https://ntfy.chat.localhost> | Subscribe to `chat-alerts` for pages, or `chat-heartbeat` for the Watchdog |
+| <https://mailpit.chat.localhost> | Alert emails |
+
+**How the signals flow:**
+
+- Each chatserver pod sends OTLP to the Collector:
+  - traces go to Tempo;
+  - metrics go to Prometheus's OTLP receiver;
+  - logs go to Loki's OTLP endpoint.
+- Profiles go straight to Pyroscope.
+- Envoy starts every trace at the gateway, so a single trace covers the request from the edge, through Redis, to each server that delivers the message.
+- In Grafana you can jump from a trace to its logs and to the matching CPU profile.
+
+**SLOs and alerts:**
+
+- Pyrra turns two SLOs into multi-window burn-rate alerts:
+  - 99.5% of handshakes and HTTP requests without a 5xx;
+  - 99% of Redis fan-outs under 250 ms.
+- The chart also pages on "no chatserver replica available" and on failing blackbox probes.
+- Alertmanager sends everything to ntfy and to Mailpit. The always-firing `Watchdog` goes to the `chat-heartbeat` topic, so you can see that delivery works.
+
+**Autoscaling:**
+
+- KEDA scales chatserver between 2 and 6 replicas, targeting 50 open sockets per pod.
+- `just load` runs a k6 WebSocket test through Envoy (150 users by default; `just load 300` for more). Watch the "Replicas" panel climb while it runs.
+- Existing sockets stay where they are. New ones go to the least busy pod, because Envoy balances with LeastRequest.
+- When the load stops, KEDA scales back down after its cooldown. The drained pods close their sockets with 1001, and clients reconnect.
+
+On macOS, `just load` needs the CA trusted (`just trust-ca`), because Go on macOS ignores `SSL_CERT_FILE`.
+
 ## GitOps mode
 
 `just gitops` hands the app to Argo CD as well. It deploys `deploy/helm/chat` from `main` with the signed GHCR images into the `chat-gitops` namespace, at <https://gitops.chat.localhost>. `just gitops-off` removes it. The two modes use different namespaces and hostnames, so they never fight over the same objects.
@@ -85,6 +131,9 @@ On a rolling update or a pod deletion:
 | `just e2e` | Two WebSocket clients exchange a message; history contains it |
 | `just e2e-drain` | Rolling restart under an open socket expects close 1001 and a reconnect |
 | `just tofu-lock` | Provider lock files for macOS and Linux |
+| `just load [vus]` | k6 WebSocket load through Envoy; fails unless KEDA scales chatserver out |
+| `just obs-check` | Asserts that metrics, traces, logs, profiles, the dashboard, SLO rules and alert notifications all arrived |
+| `just grafana-password` | Grafana admin password |
 
 CI runs the same sequence in `.github/workflows/k8s-e2e.yaml` on every pull request that touches the app, the chart, the platform or the infrastructure. The Dagger `manifests` and `tofu` checks lint the charts, validate every manifest against the Kubernetes 1.36 and CRD schemas, and validate both OpenTofu roots.
 
