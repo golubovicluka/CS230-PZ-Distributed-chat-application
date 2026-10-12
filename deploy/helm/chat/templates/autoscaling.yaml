@@ -1,0 +1,22 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: chatserver
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: chatserver
+  minReplicaCount: {{ .Values.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicas }}
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.autoscaling.prometheusUrl }}
+        query: sum(chat_connections_active{job="chatserver", k8s_namespace_name="{{ .Release.Namespace }}"})
+        threshold: {{ .Values.autoscaling.connectionsPerPod | quote }}
+        ignoreNullValues: "true"
+{{- end }}

@@ -4,6 +4,16 @@ metadata:
   name: chat-proxy
   namespace: envoy-gateway-system
 spec:
+  telemetry:
+    tracing:
+      samplingRate: 100
+      provider:
+        type: OpenTelemetry
+        serviceName: envoy-gateway
+        backendRefs:
+          - name: otel-collector
+            namespace: observability
+            port: 4317
   provider:
     type: Kubernetes
     kubernetes:

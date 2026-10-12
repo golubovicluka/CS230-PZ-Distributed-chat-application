@@ -10,7 +10,8 @@ This roadmap maps the 65-tool DevOps list onto this project: which tools are ado
 | 1 | Containers, Compose, Colima, just, mise, linters, gitleaks, Renovate, OpenTelemetry, Pyroscope | Done |
 | 2 | CI with Dagger, act, SBOM, scanning, signing | Done |
 | 4 | Kubernetes on kind: OpenTofu, Argo CD, Envoy Gateway, cert-manager, CloudNativePG, OpenBao, External Secrets, Tilt, zot, Headlamp, k9s | Done |
-| 3, 5 to 9 | Features, SRE, delivery, security, IaC, stretch | Planned |
+| 5 | Observability and SRE on kind: kube-prometheus-stack, Loki, Tempo, Pyroscope, OTel Collector, Pyrra SLOs, blackbox, KEDA, k6, ntfy, Mailpit | Done |
+| 3, 6 to 9 | Features, delivery, security, IaC, stretch | Planned |
 
 Notes from implementing Phases 0 and 1:
 
@@ -38,6 +39,18 @@ Notes from implementing Phase 4:
 - **kubeconform:** the datree catalog's `ClusterSecretStore` v1 schema does not compile as draft-04 (a CRD property named `additionalProperties` is a boolean), so that one kind is skipped. The first kubeconform run caught a real duplicate-label bug in the chart.
 - **Argo CD diff:** server-side diff is on for the whole controller. Without it, fields that the API server defaults on Gateway API resources, such as `matches` and the `group` and `kind` of references, show up as permanent drift. The first kind run in CI stalled exactly there.
 - **End to end in CI:** `k8s-e2e.yaml` builds the platform on kind for the PR's revision, deploys with `tilt ci`, and runs the smoke test and two Go WebSocket tests. One test checks fan-out and history. The other checks that a rolling restart closes sockets with 1001, not 1006. The drain test fails on a hard kill.
+
+Notes from implementing Phase 5:
+
+- **Charts:** the OSS Loki and Tempo charts now live in `grafana-community`. The chart in the `grafana/loki` repository is the Enterprise Logs chart. Tempo 3 runs monolithic without Kafka.
+- **Signals:** chatserver sends OTLP to one Collector, which forwards traces to Tempo, metrics to Prometheus's native OTLP receiver and logs to Loki's native OTLP endpoint. No exporters or log shippers sit in between.
+  - Each pod sets `service.instance.id` to its own name. Without that, two pods' `chat_connections_active` gauges would land on the same series and overwrite each other.
+  - `k8s.namespace.name` is promoted to a label, so the Tilt and GitOps deployments stay apart.
+  - Envoy starts the trace at the gateway, so one trace runs from the edge through Redis to every server.
+- **Alerts:** ntfy's built-in `alertmanager` template replaced the ntfy-alertmanager bridge. The `Watchdog` heartbeat goes to its own ntfy topic and to Mailpit, so CI can prove the whole delivery path without causing an outage. Control-plane scraping that cannot work on kind (etcd, scheduler, controller-manager, kube-proxy) is off, so those alerts don't fire on every run.
+- **Autoscaling:** KEDA scales chatserver on live sockets, at 50 per pod. Once KEDA owns the Deployment's replica count, the chart leaves `replicas` out, so Tilt and Argo CD never fight the HPA. The scanner trigger moves to Phase 3 with the scanner.
+- **Load test:** it uses `?username=` rather than Keycloak users until Phase 3. k6 writes its time trends to Prometheus in seconds.
+- **Verification:** every PromQL expression in the dashboard, rules, SLOs and KEDA trigger is parsed with the Prometheus parser, and the Alertmanager config passes `amtool check-config`. In CI, `just load` must make KEDA scale out, and `just obs-check` asserts each backend.
 
 ## Context
 
@@ -112,7 +125,7 @@ Phase numbers refer to the phases below.
 | 25 | Pub/Sub emulator | Add P3 | `attachment.uploaded` events to the scanner (at-least-once with ack, in contrast to Redis at-most-once fan-out) |
 | 26 | GCS emulator (fake-gcs-server) | Add P3 | attachment blobs; Firebase emulator skipped (it overlaps Keycloak, GCS and Pub/Sub) |
 | 27 | Floci | Add P6 | S3 target for CNPG and Velero backups; MiniStack as fallback |
-| 28 | Mailpit | Add P3 | Keycloak verify and reset emails, Alertmanager email receiver |
+| 28 | Mailpit | Add P5, P3 | Alertmanager email receiver now; Keycloak verify and reset emails in P3 |
 | 29 | OpenFGA + fga CLI | Add P3 | room owner/admin/member relations, attachments inherit from their room; `fga model test` in CI |
 | 30 | Keycloak | Add P3 | OIDC PKCE for the SPA, realm import JSON, test users; Zitadel skipped |
 | 31 | ClamAV | Add P3 | clamd INSTREAM scan in `cmd/scanner`; e2e test with the EICAR test file |
@@ -125,8 +138,8 @@ Phase numbers refer to the phases below.
 | 38 | grafana/otel-lgtm | Add P1 | Compose observability backend in one container |
 | 39 | SigNoz | Skip | duplicates 33 to 38 |
 | 40 | kube-state-metrics, node-exporter, cAdvisor | Add P5 | from kube-prometheus-stack (cAdvisor via kubelet) |
-| 41 | blackbox exporter, Uptime Kuma | Add P3 (Kuma in Compose), P5 (blackbox) | probe `/healthz` and the WS upgrade (expect 101) |
-| 42 | Pyrra | Add P5 | SLO CRDs: WS handshake availability 99.5%, fan-out p99 latency; Sloth skipped |
+| 41 | blackbox exporter, Uptime Kuma | Add P3 (Kuma in Compose), P5 (blackbox) | Probes on the web and chatserver health endpoints |
+| 42 | Pyrra | Add P5 | SLO CRDs: handshake availability 99.5%, 99% of fan-outs under 250 ms; Sloth skipped |
 | 43 | k6 | Add P5 | WS load through the gateway, measuring cross-server delivery latency; drives the KEDA demo |
 | 44 | Chaos Mesh | Add P6 | kill chatserver pods, partition chatserver from Redis, add Postgres latency, fail over the CNPG primary; Litmus skipped |
 | 45 | Toxiproxy | Add P3 | Compose profile with latency or cuts between chatservers and Redis/Postgres |
@@ -136,7 +149,7 @@ Phase numbers refer to the phases below.
 | 49 | Kyverno | Add P7 | resource limits, non-root, no `:latest`, verifyImages for cosign; Kyverno CLI runs in CI on the rendered chart |
 | 50 | Crossplane | Skip (stretch P9) | overlaps OpenTofu + Argo CD; the only honest use is a `ChatTenant` composition |
 | 51 | Backstage | Partial P9 | `catalog-info.yaml` only; a running instance isn't worth about 2 GB here |
-| 52 | KEDA | Add P5 | chatserver on connections per pod (Prometheus scaler), scanner on pending rows (PostgreSQL scaler) |
+| 52 | KEDA | Add P5, P3 | chatserver on connections per pod (Prometheus scaler); scanner on pending rows (PostgreSQL scaler) with the scanner in P3 |
 | 53 | Velero | Add P6 | namespace backups to Floci, plus a restore drill |
 | 54 | vcluster | Stretch P9 | per-branch preview environment inside kind |
 | 55 | Headlamp, k9s | Add P4 | cluster UIs |
@@ -149,7 +162,7 @@ Phase numbers refer to the phases below.
 | 62 | buf | Add P3 | proto contracts for the WS envelope and the Connect RPC APIs; `buf lint`, `buf breaking`, Go + TS codegen |
 | 63 | golangci-lint, shellcheck, yamllint, markdownlint | Add P1 | linters |
 | 64 | Playwright, pnpm, Node | Add P1 (pnpm, Node 24 LTS), P3 (Playwright) | two-user, cross-server e2e |
-| 65 | ntfy | Add P5 | Alertmanager (via the ntfy-alertmanager bridge), Argo CD notifications, Falco, CI failures; Mattermost skipped |
+| 65 | ntfy | Add P5 | Alertmanager through ntfy's built-in template, later Argo CD notifications, Falco and CI failures; Mattermost skipped |
 
 Result: 61 of 65 numbers get at least one pick in core phases. Item 39 is an alternative to 38. Items 24 and 50 are skipped on purpose. Items 8, 51 and 54 are stretch.
 
@@ -166,7 +179,7 @@ deploy/policies/  deploy/chaos/
 infra/local/  infra/secrets/  infra/gcp/  .tflint.hcl  infracost.yml
 ci/ (Dagger module)  .github/workflows/{ci,release}.yaml
 auth/keycloak/realm-chat.json  authz/{model.fga,store.fga.yaml}
-observability/{dashboards,rules}/
+deploy/helm/chat/dashboards/  deploy/platform/observability/
 test/e2e/ (Go, against the cluster)  chat-app/e2e/ (Playwright)  tests/load/ (k6)
 justfile  mise.toml  Tiltfile  renovate.json
 .golangci.yml  .yamllint.yaml  .markdownlint-cli2.yaml  .gitleaks.toml
@@ -283,13 +296,21 @@ Each phase leaves the project runnable and lands as its own pull request.
 
 ### Phase 5: Observability and SRE in Kubernetes
 
-- Backends: kube-prometheus-stack (OTLP receiver on), Loki, Tempo and Pyroscope (single-binary modes).
-- OTel Collector Deployment routes OTLP to each backend. Dashboards come from `observability/dashboards/`.
-- blackbox exporter Probes, Pyrra `ServiceLevelObjective`s in the chart.
-- Alerts: Alertmanager to the ntfy-alertmanager bridge to ntfy, plus Mailpit email.
-- KEDA ScaledObjects for chatserver (Prometheus) and scanner (PostgreSQL).
-- `tests/load/ws-fanout.js` (k6 `k6/websockets`) with Prometheus remote-write output; test users come from Keycloak direct grant in a test-only client.
-- Verify: `just load` makes KEDA scale chatserver from 2 to N, Pyrra shows the error budget burn, and an alert reaches the ntfy app.
+- Backends, from Argo CD: kube-prometheus-stack, with Prometheus's OTLP and remote-write receivers on. Loki and Tempo run single-binary, plus Pyroscope.
+- An OpenTelemetry Collector routes OTLP to each backend. Envoy sends gateway spans to it.
+- The chart carries the rest:
+  - blackbox `Probe`s;
+  - Pyrra `ServiceLevelObjective`s;
+  - a `PrometheusRule`;
+  - PodMonitors for CloudNativePG (the Envoy PodMonitor lives in the platform repo path);
+  - the Chat dashboard (`deploy/helm/chat/dashboards/chat.json`);
+  - a KEDA `ScaledObject` for chatserver.
+- Alerts go from Alertmanager to ntfy (built-in template) and to Mailpit email.
+- `tests/load/ws-fanout.js` (k6 2.x, `k6/websockets`) writes to Prometheus over remote write.
+- Verify:
+  - `just load` makes KEDA scale chatserver above 2.
+  - `just obs-check` finds every signal, the dashboard, the SLO rules and the heartbeat in ntfy and Mailpit.
+  - Pyrra shows the error budget at <https://pyrra.chat.localhost>.
 
 ### Phase 6: Delivery and resilience
 

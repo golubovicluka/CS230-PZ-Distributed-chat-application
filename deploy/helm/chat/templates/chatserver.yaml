@@ -6,7 +6,9 @@ metadata:
     {{- include "chat.labels" . | nindent 4 }}
     app.kubernetes.io/name: chatserver
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.chatserver.replicas }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "chat.selector" "chatserver" | nindent 6 }}
@@ -59,6 +61,24 @@ spec:
                 secretKeyRef:
                   name: chat-redis
                   key: password
+            {{- if .Values.observability.enabled }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.observability.otlpEndpoint | quote }}
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: {{ .Values.observability.metricExportIntervalMs | quote }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: service.instance.id=$(POD_NAME),k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE)
+            - name: PYROSCOPE_SERVER_ADDRESS
+              value: {{ .Values.observability.pyroscopeAddress | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

@@ -72,6 +72,12 @@ All three OpenTelemetry signals and continuous profiles go to a single `grafana/
 
 Telemetry is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` (and, for profiles, `PYROSCOPE_SERVER_ADDRESS`) is set.
 
+On the kind cluster the same signals go through an OpenTelemetry Collector to Prometheus, Loki, Tempo and Pyroscope.
+
+- Grafana has a Chat dashboard.
+- Pyrra tracks two SLOs, and Alertmanager pages through ntfy and Mailpit.
+- KEDA scales the chat servers on open sockets, and `just load` proves it with a k6 WebSocket test. See [docs/kubernetes.md](docs/kubernetes.md#observability-and-sre).
+
 ## Failure drills
 
 ```bash

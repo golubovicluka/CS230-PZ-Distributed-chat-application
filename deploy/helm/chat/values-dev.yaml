@@ -7,3 +7,9 @@ web:
   image:
     repository: chat-web
     tag: ""
+
+observability:
+  enabled: true
+
+autoscaling:
+  enabled: true

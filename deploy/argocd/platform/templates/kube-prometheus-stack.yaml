@@ -1,0 +1,172 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 92.3.0
+    helm:
+      valuesObject:
+        prometheusOperator:
+          admissionWebhooks:
+            enabled: false
+          tls:
+            enabled: false
+        kubeEtcd:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        windowsMonitoring:
+          enabled: false
+        defaultRules:
+          rules:
+            etcd: false
+            kubeControllerManager: false
+            kubeSchedulerAlerting: false
+            kubeSchedulerRecording: false
+            kubeProxy: false
+            windows: false
+        prometheus:
+          prometheusSpec:
+            enableOTLPReceiver: true
+            enableRemoteWriteReceiver: true
+            otlp:
+              promoteResourceAttributes:
+                - k8s.pod.name
+                - k8s.namespace.name
+            retention: 2d
+            externalUrl: https://prometheus.chat.localhost
+            ruleSelectorNilUsesHelmValues: false
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            probeSelectorNilUsesHelmValues: false
+            scrapeConfigSelectorNilUsesHelmValues: false
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+              limits:
+                memory: 2Gi
+        alertmanager:
+          alertmanagerSpec:
+            externalUrl: https://alertmanager.chat.localhost
+          config:
+            global:
+              resolve_timeout: 5m
+              smtp_smarthost: mailpit.observability.svc:1025
+              smtp_from: alertmanager@chat.localhost
+              smtp_require_tls: false
+            inhibit_rules:
+              - source_matchers:
+                  - severity = critical
+                target_matchers:
+                  - severity =~ warning|info
+                equal:
+                  - namespace
+                  - alertname
+              - source_matchers:
+                  - severity = warning
+                target_matchers:
+                  - severity = info
+                equal:
+                  - namespace
+                  - alertname
+              - source_matchers:
+                  - alertname = InfoInhibitor
+                target_matchers:
+                  - severity = info
+                equal:
+                  - namespace
+              - target_matchers:
+                  - alertname = InfoInhibitor
+            route:
+              receiver: oncall
+              group_by:
+                - alertname
+                - namespace
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                - receiver: heartbeat
+                  matchers:
+                    - alertname = "Watchdog"
+                  repeat_interval: 12h
+                - receiver: 'null'
+                  matchers:
+                    - alertname = "InfoInhibitor"
+            receivers:
+              - name: 'null'
+              - name: oncall
+                webhook_configs:
+                  - url: http://ntfy.observability.svc/chat-alerts?template=alertmanager
+                    send_resolved: true
+                email_configs:
+                  - to: oncall@chat.localhost
+                    send_resolved: true
+              - name: heartbeat
+                webhook_configs:
+                  - url: http://ntfy.observability.svc/chat-heartbeat?template=alertmanager
+                email_configs:
+                  - to: oncall@chat.localhost
+            templates:
+              - /etc/alertmanager/config/*.tmpl
+        grafana:
+          admin:
+            existingSecret: grafana-admin
+          grafana.ini:
+            server:
+              root_url: https://grafana.chat.localhost
+          additionalDataSources:
+            - name: Loki
+              uid: loki
+              type: loki
+              url: http://loki.observability.svc:3100
+              jsonData:
+                derivedFields:
+                  - name: TraceID
+                    matcherType: label
+                    matcherRegex: trace_id
+                    datasourceUid: tempo
+                    url: $${__value.raw}
+            - name: Tempo
+              uid: tempo
+              type: tempo
+              url: http://tempo.observability.svc:3200
+              jsonData:
+                tracesToLogsV2:
+                  datasourceUid: loki
+                  filterByTraceID: true
+                  spanStartTimeShift: -5m
+                  spanEndTimeShift: 5m
+                tracesToProfiles:
+                  datasourceUid: pyroscope
+                  profileTypeId: process_cpu:cpu:nanoseconds:cpu:nanoseconds
+                serviceMap:
+                  datasourceUid: prometheus
+                nodeGraph:
+                  enabled: true
+            - name: Pyroscope
+              uid: pyroscope
+              type: grafana-pyroscope-datasource
+              url: http://pyroscope.observability.svc:4040
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

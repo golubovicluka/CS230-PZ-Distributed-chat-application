@@ -172,6 +172,29 @@ resource "kubernetes_secret_v1" "root_ca" {
   }
 }
 
+resource "kubernetes_namespace_v1" "observability" {
+  metadata {
+    name = "observability"
+  }
+}
+
+resource "random_password" "grafana_admin" {
+  length  = 24
+  special = false
+}
+
+resource "kubernetes_secret_v1" "grafana_admin" {
+  metadata {
+    name      = "grafana-admin"
+    namespace = kubernetes_namespace_v1.observability.metadata[0].name
+  }
+
+  data = {
+    "admin-user"     = "admin"
+    "admin-password" = random_password.grafana_admin.result
+  }
+}
+
 resource "helm_release" "argocd" {
   name             = "argocd"
   namespace        = "argocd"
@@ -251,6 +274,7 @@ resource "helm_release" "platform" {
 
   depends_on = [
     kubernetes_secret_v1.root_ca,
+    kubernetes_secret_v1.grafana_admin,
     kubernetes_config_map_v1.local_registry_hosting,
     docker_container.registry,
   ]

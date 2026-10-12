@@ -47,6 +47,8 @@ doctor:
     @tilt version
     @k9s version --short | head -1
     @kubeconform -v
+    @k6 version
+    @jq --version
 
 # Build and start the full stack: http://localhost:8080
 up:
@@ -202,11 +204,14 @@ platform-wait timeout="900":
     #!/usr/bin/env bash
     set -euo pipefail
     deadline=$((SECONDS + {{ timeout }}))
-    for app in cert-manager envoy-gateway cloudnative-pg openbao external-secrets platform-config headlamp; do
+    for app in cert-manager envoy-gateway cloudnative-pg openbao external-secrets kube-prometheus-stack keda \
+      platform-config loki tempo pyroscope opentelemetry-collector blackbox-exporter pyrra headlamp observability-config; do
       until [[ "$({{ kube }} -n argocd get application "$app" -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)" == "Synced/Healthy" ]]; do
         if ((SECONDS >= deadline)); then
           echo "timed out waiting for $app" >&2
           {{ kube }} -n argocd get applications >&2
+          echo "conditions and last operation of $app:" >&2
+          {{ kube }} -n argocd get application "$app" -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"\n"}{end}operation {.status.operationState.phase}: {.status.operationState.message}{"\n"}' >&2
           echo "resources of $app that are not Synced:" >&2
           {{ kube }} -n argocd get application "$app" -o jsonpath='{range .status.resources[?(@.status!="Synced")]}{.kind} {.namespace}/{.name}: {.status} {.health.status} {.health.message}{"\n"}{end}' >&2
           exit 1
@@ -265,6 +270,18 @@ e2e-drain base="https://chat.localhost":
     E2E_BASE_URL={{ base }} E2E_CA_FILE="$(scripts/local-ca.sh)/ca.crt" \
       E2E_RESTART_CMD="{{ kube }} -n chat rollout restart deployment/chatserver" \
       go test -tags e2e -count=1 -v -run TestGracefulDrain ./test/e2e/
+
+# Drive WebSocket load through Envoy with k6 and fail unless KEDA scales chatserver out
+load vus="150":
+    VUS={{ vus }} scripts/load.sh "$(scripts/local-ca.sh)/ca.crt"
+
+# Check that metrics, traces, logs, profiles, the dashboard, SLO rules and alert notifications arrived
+obs-check:
+    scripts/obs-check.sh
+
+# Print the Grafana admin password (user admin)
+grafana-password:
+    @{{ kube }} -n observability get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 -d; echo
 
 # Print the initial Argo CD admin password
 argocd-password:
