@@ -62,7 +62,7 @@ k8s_resource('redis', resource_deps=['secrets-ready'], labels=['data'])
 
 k8s_resource(
     'chatserver',
-    objects=['chatserver:poddisruptionbudget'],
+    objects=['chatserver:poddisruptionbudget', 'chatserver:scaledobject'],
     resource_deps=['redis', 'database-ready'],
     links=[link('https://chat.localhost', 'chat')],
     labels=['app'],
@@ -72,4 +72,17 @@ k8s_resource(
     'web',
     objects=['web:poddisruptionbudget', 'chat:httproute', 'chat:backendtrafficpolicy'],
     labels=['app'],
+)
+
+k8s_resource(
+    new_name='observability',
+    objects=[
+        'chat-db:podmonitor',
+        'chat-health:probe',
+        'chat-alerts:prometheusrule',
+        'chat-http-availability:servicelevelobjective',
+        'chat-fanout-latency:servicelevelobjective',
+        'chat-dashboard:configmap',
+    ],
+    labels=['observability'],
 )

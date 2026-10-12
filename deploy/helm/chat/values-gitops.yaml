@@ -10,3 +10,9 @@ web:
 
 database:
   instances: 1
+
+observability:
+  enabled: true
+
+autoscaling:
+  enabled: true

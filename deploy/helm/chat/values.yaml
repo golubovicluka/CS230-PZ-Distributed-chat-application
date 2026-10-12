@@ -58,3 +58,17 @@ redisSecret:
   store: openbao
   key: redis
   refreshInterval: 1h
+
+observability:
+  enabled: false
+  otlpEndpoint: http://otel-collector.observability.svc:4318
+  pyroscopeAddress: http://pyroscope.observability.svc:4040
+  metricExportIntervalMs: 10000
+  blackboxExporter: blackbox-exporter.observability.svc:9115
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  connectionsPerPod: 50
+  prometheusUrl: http://prometheus-operated.observability.svc:9090

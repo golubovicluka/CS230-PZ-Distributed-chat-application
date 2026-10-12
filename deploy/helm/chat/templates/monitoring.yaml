@@ -1,0 +1,106 @@
+{{- if .Values.observability.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: chat-db
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: chat-db
+  podMetricsEndpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: chat-health
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  jobName: chat-health
+  interval: 30s
+  module: http_2xx
+  prober:
+    url: {{ .Values.observability.blackboxExporter }}
+  targets:
+    staticConfig:
+      static:
+        - http://web.{{ .Release.Namespace }}.svc:8080/healthz
+        - http://chatserver.{{ .Release.Namespace }}.svc:8080/readyz
+      labels:
+        app: chat
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: chat-alerts
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: chat
+      rules:
+        - alert: ChatServerUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="{{ .Release.Namespace }}", deployment="chatserver"} < 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: No chatserver replica is available in {{ .Release.Namespace }}
+            description: Every WebSocket connection is failing; check the chatserver pods and their database and Redis dependencies.
+        - alert: ChatProbeFailing
+          expr: probe_success{job="chat-health"} == 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: {{`Health probe failing for {{ $labels.instance }}`}}
+            description: The blackbox exporter cannot reach a chat health endpoint through its Kubernetes Service.
+---
+apiVersion: pyrra.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: chat-http-availability
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  target: "99.5"
+  window: 7d
+  description: Chat server HTTP and WebSocket handshake requests that do not fail with a 5xx.
+  indicator:
+    ratio:
+      errors:
+        metric: http_server_request_duration_seconds_count{job="chatserver", k8s_namespace_name="{{ .Release.Namespace }}", http_response_status_code=~"5.."}
+      total:
+        metric: http_server_request_duration_seconds_count{job="chatserver", k8s_namespace_name="{{ .Release.Namespace }}"}
+---
+apiVersion: pyrra.dev/v1alpha1
+kind: ServiceLevelObjective
+metadata:
+  name: chat-fanout-latency
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+spec:
+  target: "99"
+  window: 7d
+  description: Messages fanned out from Redis to local clients within 250 ms.
+  indicator:
+    latency:
+      success:
+        metric: chat_message_fanout_duration_seconds_bucket{job="chatserver", k8s_namespace_name="{{ .Release.Namespace }}", le="0.25"}
+      total:
+        metric: chat_message_fanout_duration_seconds_count{job="chatserver", k8s_namespace_name="{{ .Release.Namespace }}"}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chat-dashboard
+  labels:
+    {{- include "chat.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  chat.json: |-
+    {{- .Files.Get "dashboards/chat.json" | nindent 4 }}
+{{- end }}
