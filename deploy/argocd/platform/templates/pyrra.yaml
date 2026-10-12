@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pyrra
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://pyrra-dev.github.io/helm-charts
+    chart: pyrra
+    targetRevision: 1.14.0
+    helm:
+      valuesObject:
+        prometheusUrl: http://prometheus-operated.observability.svc:9090
+        prometheusExternalUrl: https://prometheus.chat.localhost
+        genericRules:
+          enabled: true
+        dashboards:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

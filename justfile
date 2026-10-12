@@ -202,7 +202,8 @@ platform-wait timeout="900":
     #!/usr/bin/env bash
     set -euo pipefail
     deadline=$((SECONDS + {{ timeout }}))
-    for app in cert-manager envoy-gateway cloudnative-pg openbao external-secrets platform-config headlamp; do
+    for app in cert-manager envoy-gateway cloudnative-pg openbao external-secrets kube-prometheus-stack keda \
+      platform-config loki tempo pyroscope opentelemetry-collector blackbox-exporter pyrra headlamp observability-config; do
       until [[ "$({{ kube }} -n argocd get application "$app" -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null)" == "Synced/Healthy" ]]; do
         if ((SECONDS >= deadline)); then
           echo "timed out waiting for $app" >&2
