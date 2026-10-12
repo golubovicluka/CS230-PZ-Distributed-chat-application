@@ -33,10 +33,19 @@ spec:
             allow_structured_metadata: true
             volume_enabled: true
             retention_period: 48h
+          compactor:
+            retention_enabled: true
+            delete_request_store: filesystem
         singleBinary:
           replicas: 1
           persistence:
             size: 2Gi
+        backend:
+          replicas: 0
+        read:
+          replicas: 0
+        write:
+          replicas: 0
         gateway:
           enabled: false
         chunksCache:

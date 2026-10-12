@@ -103,7 +103,11 @@ jobs:
         run: |
           kubectl --context kind-chat -n argocd get applications || true
           for app in $(kubectl --context kind-chat -n argocd get applications -o name); do
-            echo "== ${app} resources that are not Synced or not Healthy"
+            echo "== ${app} conditions, last operation, and resources that are not Synced or not Healthy"
+            kubectl --context kind-chat -n argocd get "${app}" \
+              -o jsonpath='{range .status.conditions[*]}condition {.type}: {.message}{"\n"}{end}' || true
+            kubectl --context kind-chat -n argocd get "${app}" \
+              -o jsonpath='operation {.status.operationState.phase}: {.status.operationState.message}{"\n"}' || true
             kubectl --context kind-chat -n argocd get "${app}" \
               -o jsonpath='{range .status.resources[*]}{.kind} {.namespace}/{.name}: {.status} {.health.status} {.health.message}{"\n"}{end}' \
               | grep -Ev ': Synced( Healthy)?[[:space:]]*$' || true
